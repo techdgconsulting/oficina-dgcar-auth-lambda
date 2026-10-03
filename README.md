@@ -45,4 +45,6 @@ Repositório da Function Serverless responsável pela autenticação externa de 
 
 ## Status
 
-Estrutura inicial criada. Código da Lambda e pipeline de deploy serão adicionados nas próximas etapas.
+Estrutura inicial criada e vinculada ao plano de separação. A implementação da Lambda será adicionada na próxima etapa.
+
+O commit de referência do repositório histórico está registrado em [`ORIGEM_HISTORICA.md`](./ORIGEM_HISTORICA.md).
