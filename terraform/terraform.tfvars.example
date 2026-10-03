@@ -1,0 +1,26 @@
+aws_region  = "us-east-1"
+project_name = "oficina-dgcar"
+environment  = "homolog"
+
+vpc_id     = "vpc-xxxxxxxx"
+subnet_ids = ["subnet-xxxxxxxx", "subnet-yyyyyyyy"]
+additional_security_group_ids = []
+
+db_host     = "rds-endpoint.amazonaws.com"
+db_port     = "5432"
+db_name     = "oficina"
+db_username = "oficina"
+db_password = "change-me"
+db_ssl      = "true"
+
+client_table            = "clientes"
+client_id_column        = "id"
+client_document_column  = "documento"
+client_status_column    = ""
+client_default_status   = "ATIVO"
+client_allowed_statuses = "ATIVO"
+
+client_jwt_secret     = "change-me-with-at-least-32-characters"
+client_jwt_issuer     = "oficina-dgcar-auth-lambda"
+client_jwt_audience   = "oficina-dgcar-api"
+client_jwt_expires_in = "15m"
