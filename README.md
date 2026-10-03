@@ -115,11 +115,64 @@ Pull Requests e pushes executam:
 - instalacao de dependencias;
 - lint sintatico;
 - testes automatizados com cobertura;
+- `npm audit`;
 - empacotamento da Lambda em `dist/auth-cpf-lambda.zip`.
+- validacao Terraform;
+- `terraform plan -refresh=false` offline.
 
-Deploy real ocorre apenas por `workflow_dispatch` com `action=deploy`, usando o environment `homolog` ou `prod`.
+Deploy real ocorre apenas por `workflow_dispatch`, usando o environment `homolog` ou `prod`.
 
-Secrets esperados para deploy:
+Acoes manuais disponiveis:
+
+- `package`: valida e empacota a Lambda;
+- `apply-infra`: provisiona ou atualiza a infraestrutura AWS da Lambda via Terraform;
+- `deploy-code`: atualiza somente o codigo da Lambda ja existente.
+
+## Infraestrutura Terraform
+
+O diretorio `terraform/` provisiona:
+
+- `aws_lambda_function` para Auth CPF;
+- IAM Role da Lambda;
+- policies gerenciadas `AWSLambdaBasicExecutionRole` e `AWSLambdaVPCAccessExecutionRole`;
+- CloudWatch Log Group;
+- Security Group da Lambda;
+- configuracao de VPC com subnets privadas;
+- variaveis de ambiente usadas em runtime.
+
+Outputs publicados:
+
+- `auth_lambda_function_name`;
+- `auth_lambda_function_arn`;
+- `auth_lambda_invoke_arn`;
+- `auth_lambda_security_group_id`;
+- `auth_lambda_log_group_name`.
+
+Os outputs `auth_lambda_function_name`, `auth_lambda_invoke_arn` e `auth_lambda_function_arn` devem ser consumidos por `oficina-dgcar-infra-k8s` para conectar API Gateway a rota `POST /auth/cpf`.
+
+## Secrets Do GitHub
+
+Secrets esperados para `apply-infra`:
+
+- `AWS_ACCESS_KEY_ID`;
+- `AWS_SECRET_ACCESS_KEY`;
+- `AWS_REGION`;
+- `TF_STATE_BUCKET`;
+- `TF_STATE_KEY`;
+- `TF_LOCK_TABLE`;
+- `VPC_ID`;
+- `PRIVATE_SUBNET_IDS`;
+- `LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS`, opcional;
+- `DB_HOST`;
+- `DB_PORT`;
+- `DB_NAME`;
+- `DB_USERNAME`;
+- `DB_PASSWORD`;
+- `DB_SSL`;
+- `CLIENT_STATUS_COLUMN`, opcional;
+- `CLIENT_JWT_SECRET`.
+
+Secrets esperados para `deploy-code`:
 
 - `AWS_ACCESS_KEY_ID`;
 - `AWS_SECRET_ACCESS_KEY`;
@@ -131,6 +184,32 @@ Secrets esperados em runtime da Lambda:
 - variaveis de banco;
 - variaveis de JWT;
 - variaveis de consulta de cliente.
+
+## Provisionamento
+
+Execucao local para validar Terraform:
+
+```bash
+npm ci
+npm run package
+cd terraform
+terraform init -backend=false
+terraform fmt -check -recursive
+terraform validate
+terraform plan -refresh=false
+```
+
+Para aplicar infraestrutura real, use o workflow manual:
+
+```text
+Actions -> Auth CPF Lambda -> Run workflow -> action=apply-infra
+```
+
+Para atualizar apenas o codigo:
+
+```text
+Actions -> Auth CPF Lambda -> Run workflow -> action=deploy-code
+```
 
 ## Integracao Com Outros Repositorios
 
