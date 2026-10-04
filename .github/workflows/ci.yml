@@ -150,7 +150,7 @@ jobs:
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
             -backend-config="region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
-            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}"
+            -backend-config="use_lockfile=true"
 
       - name: Terraform apply
         working-directory: terraform
@@ -168,6 +168,24 @@ jobs:
           TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || '' }}
           TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
         run: terraform apply -auto-approve
+
+      - name: Publish Lambda outputs to dependent repositories
+        working-directory: terraform
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          AUTH_LAMBDA_REPO: techdgconsulting/oficina-dgcar-auth-lambda
+          INFRA_K8S_REPO: techdgconsulting/oficina-dgcar-infra-k8s
+        run: |
+          AUTH_LAMBDA_FUNCTION_NAME="$(terraform output -raw auth_lambda_function_name)"
+          AUTH_LAMBDA_FUNCTION_ARN="$(terraform output -raw auth_lambda_function_arn)"
+          AUTH_LAMBDA_INVOKE_ARN="$(terraform output -raw auth_lambda_invoke_arn)"
+
+          gh secret set AUTH_LAMBDA_FUNCTION_NAME --repo "$AUTH_LAMBDA_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_NAME"
+
+          gh secret set AUTH_LAMBDA_FUNCTION_NAME --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_NAME"
+          gh secret set AUTH_LAMBDA_FUNCTION_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_ARN"
+          gh secret set AUTH_LAMBDA_INVOKE_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_INVOKE_ARN"
 
   deploy-code:
     name: deploy-code
