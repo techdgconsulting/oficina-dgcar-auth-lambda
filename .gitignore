@@ -1,6 +1,11 @@
 node_modules/
 dist/
 coverage/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
 .env
 .env.*
 !.env.example

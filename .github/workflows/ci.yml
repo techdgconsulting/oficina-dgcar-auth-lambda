@@ -1,20 +1,224 @@
-name: CI
+name: Auth CPF Lambda
 
 on:
   pull_request:
+    branches:
+      - main
+      - homolog
   push:
     branches:
       - main
       - homolog
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to run"
+        required: true
+        default: "package"
+        type: choice
+        options:
+          - package
+          - apply-infra
+          - deploy-code
+      environment:
+        description: "Target environment"
+        required: true
+        default: "homolog"
+        type: choice
+        options:
+          - homolog
+          - prod
+
+permissions:
+  contents: read
 
 jobs:
   validate:
+    name: validate
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate repository structure
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint sources
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Audit dependencies
+        run: npm audit
+
+      - name: Package Lambda
+        run: npm run package
+
+      - name: Terraform fmt
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+
+      - name: Disable remote backend for offline validation
+        working-directory: terraform
+        run: mv backend.tf backend.tf.disabled
+
+      - name: Terraform init without remote state
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform plan without refresh
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || 'test' }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || 'test' }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          TF_VAR_environment: ${{ (github.base_ref || github.ref_name) == 'main' && 'prod' || 'homolog' }}
+          TF_VAR_vpc_id: ${{ secrets.VPC_ID || 'vpc-12345678' }}
+          TF_VAR_subnet_ids: ${{ secrets.PRIVATE_SUBNET_IDS || '["subnet-12345678","subnet-87654321"]' }}
+          TF_VAR_additional_security_group_ids: ${{ secrets.LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS || '[]' }}
+          TF_VAR_db_host: ${{ secrets.DB_HOST || 'localhost' }}
+          TF_VAR_db_name: ${{ secrets.DB_NAME || 'oficina' }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME || 'oficina' }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD || 'change-me' }}
+          TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET || 'change-me-with-at-least-32-characters' }}
+        run: terraform plan -refresh=false
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-cpf-lambda
+          path: dist/auth-cpf-lambda.zip
+
+  apply-infra:
+    name: apply-infra
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply-infra'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      - name: Package Lambda
+        run: npm run package
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Terraform init with remote state
+        working-directory: terraform
         run: |
-          test -f README.md
-          test -f .gitignore
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
+            -backend-config="region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform apply
+        working-directory: terraform
+        env:
+          TF_VAR_environment: ${{ inputs.environment }}
+          TF_VAR_vpc_id: ${{ secrets.VPC_ID }}
+          TF_VAR_subnet_ids: ${{ secrets.PRIVATE_SUBNET_IDS }}
+          TF_VAR_additional_security_group_ids: ${{ secrets.LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS || '[]' }}
+          TF_VAR_db_host: ${{ secrets.DB_HOST }}
+          TF_VAR_db_port: ${{ secrets.DB_PORT || '5432' }}
+          TF_VAR_db_name: ${{ secrets.DB_NAME }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
+          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || '' }}
+          TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
+        run: terraform apply -auto-approve
+
+      - name: Publish Lambda outputs to dependent repositories
+        working-directory: terraform
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          AUTH_LAMBDA_REPO: techdgconsulting/oficina-dgcar-auth-lambda
+          INFRA_K8S_REPO: techdgconsulting/oficina-dgcar-infra-k8s
+        run: |
+          AUTH_LAMBDA_FUNCTION_NAME="$(terraform output -raw auth_lambda_function_name)"
+          AUTH_LAMBDA_FUNCTION_ARN="$(terraform output -raw auth_lambda_function_arn)"
+          AUTH_LAMBDA_INVOKE_ARN="$(terraform output -raw auth_lambda_invoke_arn)"
+
+          gh secret set AUTH_LAMBDA_FUNCTION_NAME --repo "$AUTH_LAMBDA_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_NAME"
+
+          gh secret set AUTH_LAMBDA_FUNCTION_NAME --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_NAME"
+          gh secret set AUTH_LAMBDA_FUNCTION_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_ARN"
+          gh secret set AUTH_LAMBDA_INVOKE_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_INVOKE_ARN"
+
+  deploy-code:
+    name: deploy-code
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy-code'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      - name: Package Lambda
+        run: npm run package
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Update Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ secrets.AUTH_LAMBDA_FUNCTION_NAME }}" \
+            --zip-file fileb://dist/auth-cpf-lambda.zip
