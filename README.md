@@ -176,6 +176,8 @@ Outputs publicados:
 
 Os outputs `auth_lambda_function_name`, `auth_lambda_invoke_arn` e `auth_lambda_function_arn` foram definidos para consumo pelo repositorio `oficina-dgcar-infra-k8s`, responsavel por conectar o API Gateway a rota `POST /auth/cpf`.
 
+O output `auth_lambda_security_group_id` foi definido para consumo pelo repositorio `oficina-dgcar-infra-db`, responsavel por liberar a entrada PostgreSQL no RDS para a Lambda Auth CPF.
+
 ## Secrets Do GitHub
 
 Os secrets foram organizados em GitHub Environments, nao como secrets globais do repositorio.
@@ -377,6 +379,7 @@ LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS=[]
 | `AUTH_LAMBDA_FUNCTION_NAME` | Output `auth_lambda_function_name` | Depois do `apply-infra` da Lambda | `oficina-dgcar-auth-lambda` e `oficina-dgcar-infra-k8s` |
 | `AUTH_LAMBDA_INVOKE_ARN` | Output `auth_lambda_invoke_arn` | Depois do `apply-infra` da Lambda | `oficina-dgcar-infra-k8s` |
 | `AUTH_LAMBDA_FUNCTION_ARN` | Output `auth_lambda_function_arn` | Depois do `apply-infra` da Lambda | `oficina-dgcar-infra-k8s` |
+| `AUTH_LAMBDA_SECURITY_GROUP_ID` | Output `auth_lambda_security_group_id` | Depois do `apply-infra` da Lambda | `oficina-dgcar-infra-db` |
 
 ### Ordem Operacional De Provisionamento
 
@@ -402,13 +405,19 @@ Secrets gravados em `oficina-dgcar-infra-k8s` apos o `apply-infra`:
 - `AUTH_LAMBDA_FUNCTION_ARN`;
 - `AUTH_LAMBDA_INVOKE_ARN`.
 
+Secrets gravados em `oficina-dgcar-infra-db` apos o `apply-infra`:
+
+- `AUTH_LAMBDA_SECURITY_GROUP_ID`.
+
 Fluxo automatizado:
 
 1. `oficina-dgcar-infra-k8s` publica `VPC_ID` e `PRIVATE_SUBNET_IDS`.
 2. `oficina-dgcar-infra-db` publica `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` e `DB_SSL`.
 3. `oficina-dgcar-auth-lambda` executa `apply-infra`.
 4. O workflow da Lambda publica os outputs `AUTH_LAMBDA_*` para `oficina-dgcar-infra-k8s`.
-5. `oficina-dgcar-infra-k8s` executa novo `apply` para conectar API Gateway a Lambda.
+5. O workflow da Lambda publica `AUTH_LAMBDA_SECURITY_GROUP_ID` para `oficina-dgcar-infra-db`.
+6. `oficina-dgcar-infra-db` executa novo `apply` para liberar PostgreSQL ao security group da Lambda.
+7. `oficina-dgcar-infra-k8s` executa novo `apply` para conectar API Gateway a Lambda.
 
 ### Geracao Do Segredo JWT Externo
 
