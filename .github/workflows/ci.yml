@@ -176,16 +176,20 @@ jobs:
           TARGET_ENVIRONMENT: ${{ inputs.environment }}
           AUTH_LAMBDA_REPO: techdgconsulting/oficina-dgcar-auth-lambda
           INFRA_K8S_REPO: techdgconsulting/oficina-dgcar-infra-k8s
+          INFRA_DB_REPO: techdgconsulting/oficina-dgcar-infra-db
         run: |
           AUTH_LAMBDA_FUNCTION_NAME="$(terraform output -raw auth_lambda_function_name)"
           AUTH_LAMBDA_FUNCTION_ARN="$(terraform output -raw auth_lambda_function_arn)"
           AUTH_LAMBDA_INVOKE_ARN="$(terraform output -raw auth_lambda_invoke_arn)"
+          AUTH_LAMBDA_SECURITY_GROUP_ID="$(terraform output -raw auth_lambda_security_group_id)"
 
           gh secret set AUTH_LAMBDA_FUNCTION_NAME --repo "$AUTH_LAMBDA_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_NAME"
 
           gh secret set AUTH_LAMBDA_FUNCTION_NAME --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_NAME"
           gh secret set AUTH_LAMBDA_FUNCTION_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_ARN"
           gh secret set AUTH_LAMBDA_INVOKE_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_INVOKE_ARN"
+
+          gh secret set AUTH_LAMBDA_SECURITY_GROUP_ID --repo "$INFRA_DB_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_SECURITY_GROUP_ID"
 
   deploy-code:
     name: deploy-code
