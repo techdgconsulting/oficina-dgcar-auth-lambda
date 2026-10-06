@@ -3,21 +3,22 @@ locals {
 
   lambda_environment_variables = merge(
     {
-      DB_HOST                 = var.db_host
-      DB_PORT                 = var.db_port
-      DB_NAME                 = var.db_name
-      DB_USERNAME             = var.db_username
-      DB_PASSWORD             = var.db_password
-      DB_SSL                  = var.db_ssl
-      CLIENT_TABLE            = var.client_table
-      CLIENT_ID_COLUMN        = var.client_id_column
-      CLIENT_DOCUMENT_COLUMN  = var.client_document_column
-      CLIENT_DEFAULT_STATUS   = var.client_default_status
-      CLIENT_ALLOWED_STATUSES = var.client_allowed_statuses
-      CLIENT_JWT_SECRET       = var.client_jwt_secret
-      CLIENT_JWT_ISSUER       = var.client_jwt_issuer
-      CLIENT_JWT_AUDIENCE     = var.client_jwt_audience
-      CLIENT_JWT_EXPIRES_IN   = var.client_jwt_expires_in
+      DB_HOST                     = var.db_host
+      DB_PORT                     = var.db_port
+      DB_NAME                     = var.db_name
+      DB_USERNAME                 = var.db_username
+      DB_PASSWORD                 = var.db_password
+      DB_SSL                      = var.db_ssl
+      CLIENT_TABLE                = var.client_table
+      CLIENT_ID_COLUMN            = var.client_id_column
+      CLIENT_DOCUMENT_COLUMN      = var.client_document_column
+      CLIENT_PASSWORD_HASH_COLUMN = var.client_password_hash_column
+      CLIENT_DEFAULT_STATUS       = var.client_default_status
+      CLIENT_ALLOWED_STATUSES     = var.client_allowed_statuses
+      CLIENT_JWT_SECRET           = var.client_jwt_secret
+      CLIENT_JWT_ISSUER           = var.client_jwt_issuer
+      CLIENT_JWT_AUDIENCE         = var.client_jwt_audience
+      CLIENT_JWT_EXPIRES_IN       = var.client_jwt_expires_in
     },
     var.client_status_column != "" ? {
       CLIENT_STATUS_COLUMN = var.client_status_column

@@ -131,6 +131,12 @@ variable "client_document_column" {
   default     = "documento"
 }
 
+variable "client_password_hash_column" {
+  description = "Client password hash column name."
+  type        = string
+  default     = "senha_hash"
+}
+
 variable "client_status_column" {
   description = "Client status column name. Keep empty until status_cliente exists."
   type        = string
