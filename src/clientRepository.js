@@ -26,6 +26,7 @@ async function findClientByCpf(cpf) {
   const idColumn = sqlIdentifier(process.env.CLIENT_ID_COLUMN || "id");
   const documentColumn = sqlIdentifier(process.env.CLIENT_DOCUMENT_COLUMN || "documento");
   const statusColumn = optionalSqlIdentifier(process.env.CLIENT_STATUS_COLUMN);
+  const passwordHashColumn = sqlIdentifier(process.env.CLIENT_PASSWORD_HASH_COLUMN || "senha_hash");
   const defaultStatus = process.env.CLIENT_DEFAULT_STATUS || "ATIVO";
 
   const statusExpression = statusColumn ? statusColumn : "$2::text";
@@ -35,7 +36,8 @@ async function findClientByCpf(cpf) {
     select
       ${idColumn} as "clienteId",
       ${documentColumn} as "documento",
-      ${statusExpression} as "status"
+      ${statusExpression} as "status",
+      ${passwordHashColumn} as "passwordHash"
     from ${table}
     where regexp_replace(${documentColumn}, '\\D', '', 'g') = $1
     limit 1

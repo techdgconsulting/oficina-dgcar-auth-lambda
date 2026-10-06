@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 
 jest.mock("../src/clientRepository", () => ({
   findClientByCpf: jest.fn()
@@ -8,6 +9,8 @@ const { findClientByCpf } = require("../src/clientRepository");
 const { handler } = require("../src/handler");
 
 const jwtSecret = "01234567890123456789012345678901";
+const validPassword = "Cliente@123";
+const validPasswordHash = bcrypt.hashSync(validPassword, 10);
 
 describe("auth CPF handler", () => {
   beforeEach(() => {
@@ -30,32 +33,55 @@ describe("auth CPF handler", () => {
   test("returns 404 when client does not exist", async () => {
     findClientByCpf.mockResolvedValue(null);
 
-    const response = await handler(event({ cpf: "529.982.247-25" }));
+    const response = await handler(event({ cpf: "529.982.247-25", senha: validPassword }));
 
     expect(response.statusCode).toBe(404);
     expect(JSON.parse(response.body).error).toBe("CLIENTE_NAO_ENCONTRADO");
     expect(findClientByCpf).toHaveBeenCalledWith("52998224725");
   });
 
+  test("returns 400 when password is missing", async () => {
+    const response = await handler(event({ cpf: "529.982.247-25" }));
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body).error).toBe("SENHA_OBRIGATORIA");
+    expect(findClientByCpf).not.toHaveBeenCalled();
+  });
+
   test("returns 403 for blocked client status", async () => {
     findClientByCpf.mockResolvedValue({
       clienteId: 10,
-      status: "BLOQUEADO"
+      status: "BLOQUEADO",
+      passwordHash: validPasswordHash
     });
 
-    const response = await handler(event({ cpf: "529.982.247-25" }));
+    const response = await handler(event({ cpf: "529.982.247-25", senha: validPassword }));
 
     expect(response.statusCode).toBe(403);
     expect(JSON.parse(response.body).error).toBe("CLIENTE_SEM_ACESSO");
   });
 
+  test("returns 401 when password does not match", async () => {
+    findClientByCpf.mockResolvedValue({
+      clienteId: 10,
+      status: "ATIVO",
+      passwordHash: validPasswordHash
+    });
+
+    const response = await handler(event({ cpf: "529.982.247-25", senha: "SenhaErrada@123" }));
+
+    expect(response.statusCode).toBe(401);
+    expect(JSON.parse(response.body).error).toBe("CREDENCIAIS_INVALIDAS");
+  });
+
   test("returns client JWT with external claims", async () => {
     findClientByCpf.mockResolvedValue({
       clienteId: 10,
-      status: "ATIVO"
+      status: "ATIVO",
+      passwordHash: validPasswordHash
     });
 
-    const response = await handler(event({ cpf: "529.982.247-25" }));
+    const response = await handler(event({ cpf: "529.982.247-25", senha: validPassword }));
     const body = JSON.parse(response.body);
     const decoded = jwt.verify(body.accessToken, jwtSecret, {
       issuer: "oficina-dgcar-auth-lambda",
