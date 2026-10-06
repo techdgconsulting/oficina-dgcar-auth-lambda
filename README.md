@@ -14,6 +14,14 @@ Este repositorio contem a Function Serverless implementada para:
 - emitir JWT externo com `tipo=CLIENTE`;
 - separar o JWT de cliente do JWT interno usado por `ATENDENTE`, `MECANICO` e `GESTOR`.
 
+## Documentacao Central
+
+A documentacao arquitetural completa do Tech Challenge 3 esta centralizada em:
+
+[oficina-dgcar-docs](https://github.com/techdgconsulting/oficina-dgcar-docs)
+
+Este repositorio mantem apenas a documentacao especifica da Lambda Auth CPF, incluindo contrato, variaveis, Terraform, pipeline e deploy da funcao.
+
 ## Contrato HTTP
 
 Endpoint previsto no API Gateway:
