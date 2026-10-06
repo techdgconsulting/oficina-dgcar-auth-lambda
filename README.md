@@ -157,7 +157,7 @@ Pull Requests e pushes executam:
 - instalacao de dependencias;
 - lint sintatico;
 - testes automatizados com cobertura;
-- `npm audit`;
+- `npm audit --omit=dev`;
 - empacotamento da Lambda em `dist/auth-cpf-lambda.zip`.
 - validacao Terraform;
 - `terraform plan -refresh=false` offline.
