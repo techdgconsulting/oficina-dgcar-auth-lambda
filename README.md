@@ -168,7 +168,10 @@ Acoes manuais disponiveis:
 
 - `package`: valida e empacota a Lambda;
 - `apply-infra`: provisiona ou atualiza a infraestrutura AWS da Lambda via Terraform;
-- `deploy-code`: atualiza somente o codigo da Lambda ja existente.
+- `deploy-code`: atualiza somente o codigo da Lambda ja existente;
+- `destroy-infra`: remove Function, Log Group, IAM, security group da Lambda e limpa os outputs publicados nos repos dependentes.
+
+O `destroy-infra` exige `confirm_destroy=DESTROY` e aprovacao do GitHub Environment. Esse fluxo deve ser executado antes do destroy do banco e antes do destroy final da VPC no repo `oficina-dgcar-infra-k8s`, liberando as ENIs gerenciadas pela Lambda nas subnets privadas.
 
 ## Infraestrutura Terraform
 
