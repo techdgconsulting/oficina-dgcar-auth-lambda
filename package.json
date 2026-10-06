@@ -7,12 +7,13 @@
   "scripts": {
     "test": "node ./node_modules/jest/bin/jest.js --coverage",
     "package": "node scripts/package.js",
-    "lint": "node --check src/handler.js && node --check src/cpf.js && node --check src/clientRepository.js && node --check src/tokenService.js"
+    "lint": "node --check src/handler.js && node --check src/cpf.js && node --check src/clientRepository.js && node --check src/passwordService.js && node --check src/tokenService.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1"
   },

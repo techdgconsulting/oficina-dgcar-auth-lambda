@@ -1,5 +1,6 @@
 const { isValidCpf, normalizeCpf } = require("./cpf");
 const { findClientByCpf } = require("./clientRepository");
+const { verifyPassword } = require("./passwordService");
 const { createClientToken } = require("./tokenService");
 const { jsonResponse, parseJsonBody } = require("./http");
 
@@ -7,6 +8,7 @@ async function handler(event) {
   try {
     const payload = parseJsonBody(event);
     const cpf = normalizeCpf(payload.cpf);
+    const senha = payload.senha;
 
     if (!isValidCpf(cpf)) {
       return jsonResponse(400, {
@@ -15,11 +17,26 @@ async function handler(event) {
       });
     }
 
+    if (!senha || typeof senha !== "string") {
+      return jsonResponse(400, {
+        error: "SENHA_OBRIGATORIA",
+        message: "Senha do cliente e obrigatoria."
+      });
+    }
+
     const client = await findClientByCpf(cpf);
     if (!client) {
       return jsonResponse(404, {
         error: "CLIENTE_NAO_ENCONTRADO",
         message: "Cliente nao encontrado para o CPF informado."
+      });
+    }
+
+    const passwordMatches = await verifyPassword(senha, client.passwordHash);
+    if (!passwordMatches) {
+      return jsonResponse(401, {
+        error: "CREDENCIAIS_INVALIDAS",
+        message: "CPF ou senha invalidos."
       });
     }
 

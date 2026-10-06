@@ -1,17 +1,26 @@
 # oficina-dgcar-auth-lambda
 
-Lambda de autenticacao externa por CPF para clientes da Oficina Mecanica DGCar.
+Lambda de autenticacao externa por CPF e senha para clientes da Oficina Mecanica DGCar.
 
 ## Proposito
 
 Este repositorio contem a Function Serverless implementada para:
 
-- receber CPF informado pelo cliente externo;
+- receber CPF e senha informados pelo cliente externo;
 - validar formato e digitos do CPF;
 - consultar o cliente no PostgreSQL gerenciado;
 - verificar existencia e status do cliente;
+- validar a senha contra hash armazenado no banco;
 - emitir JWT externo com `tipo=CLIENTE`;
 - separar o JWT de cliente do JWT interno usado por `ATENDENTE`, `MECANICO` e `GESTOR`.
+
+## Documentacao Central
+
+A documentacao arquitetural completa do Tech Challenge 3 esta centralizada em:
+
+[oficina-dgcar-docs](https://github.com/techdgconsulting/oficina-dgcar-docs)
+
+Este repositorio mantem apenas a documentacao especifica da Lambda Auth CPF, incluindo contrato, variaveis, Terraform, pipeline e deploy da funcao.
 
 ## Contrato HTTP
 
@@ -26,7 +35,8 @@ Entrada:
 
 ```json
 {
-  "cpf": "529.982.247-25"
+  "cpf": "529.982.247-25",
+  "senha": "Cliente@123"
 }
 ```
 
@@ -43,8 +53,10 @@ Resposta `200`:
 Erros esperados:
 
 - `400 CPF_INVALIDO`: CPF com formato ou digitos invalidos.
+- `400 SENHA_OBRIGATORIA`: senha ausente ou em formato invalido.
 - `400 JSON_INVALIDO`: corpo da requisicao nao e JSON valido.
 - `404 CLIENTE_NAO_ENCONTRADO`: CPF valido sem cliente cadastrado.
+- `401 CREDENCIAIS_INVALIDAS`: CPF existente com senha incorreta ou hash ausente.
 - `403 CLIENTE_SEM_ACESSO`: cliente existe, mas status nao permite autenticacao.
 - `500 ERRO_INTERNO`: falha inesperada de banco, token ou configuracao.
 
@@ -54,6 +66,8 @@ Regras de contrato implementadas:
 - o CPF possui validacao de tamanho, formato e digitos verificadores;
 - o cliente e consultado na tabela configurada por variaveis de ambiente;
 - a autenticacao depende da existencia do cliente;
+- CPF sozinho nao autentica cliente externo;
+- a senha recebida e comparada com o hash configurado por `CLIENT_PASSWORD_HASH_COLUMN`;
 - o status do cliente e validado contra `CLIENT_ALLOWED_STATUSES`;
 - o JWT externo sempre e emitido com `tipo=CLIENTE`;
 - o JWT externo nao carrega roles internas da oficina.
@@ -64,6 +78,7 @@ Query de cliente padrao:
 tabela=clientes
 coluna_id=id
 coluna_documento=documento
+coluna_senha_hash=senha_hash
 status_padrao=ATIVO
 ```
 
@@ -107,6 +122,7 @@ Consulta de cliente:
 - `CLIENT_TABLE`, padrao `clientes`;
 - `CLIENT_ID_COLUMN`, padrao `id`;
 - `CLIENT_DOCUMENT_COLUMN`, padrao `documento`;
+- `CLIENT_PASSWORD_HASH_COLUMN`, padrao `senha_hash`;
 - `CLIENT_STATUS_COLUMN`, opcional;
 - `CLIENT_DEFAULT_STATUS`, padrao `ATIVO`;
 - `CLIENT_ALLOWED_STATUSES`, padrao `ATIVO`.
@@ -131,7 +147,7 @@ npm run package
 Para simular chamada local:
 
 ```bash
-node -e "const { handler } = require('./src/handler'); handler({ body: JSON.stringify({ cpf: '529.982.247-25' }) }).then(console.log)"
+node -e "const { handler } = require('./src/handler'); handler({ body: JSON.stringify({ cpf: '529.982.247-25', senha: 'Cliente@123' }) }).then(console.log)"
 ```
 
 ## Pipeline
@@ -141,7 +157,7 @@ Pull Requests e pushes executam:
 - instalacao de dependencias;
 - lint sintatico;
 - testes automatizados com cobertura;
-- `npm audit`;
+- `npm audit --omit=dev`;
 - empacotamento da Lambda em `dist/auth-cpf-lambda.zip`.
 - validacao Terraform;
 - `terraform plan -refresh=false` offline.
@@ -453,6 +469,7 @@ Secrets esperados para `apply-infra`:
 - `DB_USERNAME`;
 - `DB_PASSWORD`;
 - `DB_SSL`;
+- `CLIENT_PASSWORD_HASH_COLUMN`, padrao `senha_hash`;
 - `CLIENT_STATUS_COLUMN`, opcional;
 - `CLIENT_JWT_SECRET`.
 
@@ -507,7 +524,9 @@ A evidencia minima de funcionamento e composta por:
 
 - testes automatizados verdes;
 - package `dist/auth-cpf-lambda.zip` gerado;
-- chamada `POST /auth/cpf` retornando JWT;
+- chamada `POST /auth/cpf` com CPF e senha retornando JWT;
+- chamada `POST /auth/cpf` sem senha retornando `400 SENHA_OBRIGATORIA`;
+- chamada `POST /auth/cpf` com senha incorreta retornando `401 CREDENCIAIS_INVALIDAS`;
 - JWT decodificado contendo `tipo=CLIENTE`, `clienteId`, `status`, `sub`, `iat` e `exp`.
 
 ## Origem Historica
