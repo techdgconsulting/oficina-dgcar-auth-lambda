@@ -20,7 +20,7 @@ A documentacao arquitetural completa do Tech Challenge 3 esta centralizada em:
 
 [oficina-dgcar-docs](https://github.com/techdgconsulting/oficina-dgcar-docs)
 
-Este repositorio mantem apenas a documentacao especifica da Lambda Auth CPF, incluindo contrato, variaveis, Terraform, pipeline e deploy da funcao.
+Este repositorio mantem apenas a documentacao especifica da Lambda Auth CPF + Senha, incluindo contrato, variaveis, Terraform, pipeline e deploy da funcao.
 
 ## Contrato HTTP
 
@@ -174,7 +174,7 @@ Acoes manuais disponiveis:
 
 O diretorio `terraform/` provisiona:
 
-- `aws_lambda_function` para Auth CPF;
+- `aws_lambda_function` para Auth CPF + Senha;
 - IAM Role da Lambda;
 - policies gerenciadas `AWSLambdaBasicExecutionRole` e `AWSLambdaVPCAccessExecutionRole`;
 - CloudWatch Log Group;
@@ -192,7 +192,7 @@ Outputs publicados:
 
 Os outputs `auth_lambda_function_name`, `auth_lambda_invoke_arn` e `auth_lambda_function_arn` foram definidos para consumo pelo repositorio `oficina-dgcar-infra-k8s`, responsavel por conectar o API Gateway a rota `POST /auth/cpf`.
 
-O output `auth_lambda_security_group_id` foi definido para consumo pelo repositorio `oficina-dgcar-infra-db`, responsavel por liberar a entrada PostgreSQL no RDS para a Lambda Auth CPF.
+O output `auth_lambda_security_group_id` foi definido para consumo pelo repositorio `oficina-dgcar-infra-db`, responsavel por liberar a entrada PostgreSQL no RDS para a Lambda Auth CPF + Senha.
 
 ## Secrets Do GitHub
 
