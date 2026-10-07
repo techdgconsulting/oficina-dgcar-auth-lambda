@@ -305,6 +305,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if ! terraform state list | grep -Fxq aws_security_group.lambda; then
+            echo "Security group da Lambda ja estava ausente do state."
+            exit 0
+          fi
+
           SECURITY_GROUP_ID="$(terraform state show aws_security_group.lambda \
             | awk -F' = ' '/^[[:space:]]*id[[:space:]]*=/{gsub(/"/, "", $2); print $2; exit}')"
 
