@@ -171,7 +171,7 @@ Acoes manuais disponiveis:
 - `deploy-code`: atualiza somente o codigo da Lambda ja existente;
 - `destroy-infra`: remove Function, Log Group, IAM, security group da Lambda e limpa os outputs publicados nos repos dependentes.
 
-O `destroy-infra` exige `confirm_destroy=DESTROY` e aprovacao do GitHub Environment. Esse fluxo deve ser executado antes do destroy do banco e antes do destroy final da VPC no repo `oficina-dgcar-infra-k8s`, liberando as ENIs gerenciadas pela Lambda nas subnets privadas.
+O `destroy-infra` exige `confirm_destroy=DESTROY` e aprovacao do GitHub Environment. Esse fluxo deve ser executado depois do destroy do banco e antes do destroy final da VPC no repo `oficina-dgcar-infra-k8s`. O banco sai antes porque o security group do RDS referencia o security group da Lambda como origem autorizada para PostgreSQL.
 
 ## Infraestrutura Terraform
 
