@@ -304,15 +304,30 @@ jobs:
           INFRA_K8S_REPO: techdgconsulting/oficina-dgcar-infra-k8s
           INFRA_DB_REPO: techdgconsulting/oficina-dgcar-infra-db
         run: |
-          set +e
+          set -euo pipefail
 
           if [ -z "$GH_TOKEN" ]; then
             echo "GH_AUTOMATION_TOKEN nao configurado. Outputs publicados serao mantidos."
             exit 0
           fi
 
-          gh secret delete AUTH_LAMBDA_FUNCTION_NAME --repo "$AUTH_LAMBDA_REPO" --env "$TARGET_ENVIRONMENT"
-          gh secret delete AUTH_LAMBDA_FUNCTION_NAME --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT"
-          gh secret delete AUTH_LAMBDA_FUNCTION_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT"
-          gh secret delete AUTH_LAMBDA_INVOKE_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT"
-          gh secret delete AUTH_LAMBDA_SECURITY_GROUP_ID --repo "$INFRA_DB_REPO" --env "$TARGET_ENVIRONMENT"
+          delete_secret_if_present() {
+            local repo="$1"
+            local secret_name="$2"
+            local secret_names
+
+            secret_names="$(gh secret list --repo "$repo" --env "$TARGET_ENVIRONMENT" --json name -q '.[].name')"
+
+            if printf '%s\n' "$secret_names" | grep -Fxq "$secret_name"; then
+              gh secret delete "$secret_name" --repo "$repo" --env "$TARGET_ENVIRONMENT"
+              echo "Output $secret_name removido de $repo/$TARGET_ENVIRONMENT."
+            else
+              echo "Output $secret_name ja estava ausente em $repo/$TARGET_ENVIRONMENT."
+            fi
+          }
+
+          delete_secret_if_present "$AUTH_LAMBDA_REPO" AUTH_LAMBDA_FUNCTION_NAME
+          delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_FUNCTION_NAME
+          delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_FUNCTION_ARN
+          delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_INVOKE_ARN
+          delete_secret_if_present "$INFRA_DB_REPO" AUTH_LAMBDA_SECURITY_GROUP_ID
