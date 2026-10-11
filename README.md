@@ -163,13 +163,18 @@ Pull Requests e pushes executam:
 - validacao Terraform;
 - `terraform plan -refresh=false` offline.
 
-Deploy real ocorre apenas por `workflow_dispatch`, usando o environment `homolog` ou `prod`.
+Deploy do codigo ocorre automaticamente em push nas branches protegidas:
+
+- `homolog` atualiza a Lambda no environment `homolog`;
+- `main` atualiza a Lambda no environment `prod`.
+
+`workflow_dispatch` permanece disponivel para reprocessamento operacional controlado.
 
 Acoes manuais disponiveis:
 
 - `package`: valida e empacota a Lambda;
 - `apply-infra`: provisiona ou atualiza a infraestrutura AWS da Lambda via Terraform;
-- `deploy-code`: atualiza somente o codigo da Lambda ja existente;
+- `deploy-code`: reexecuta manualmente a atualizacao do codigo da Lambda ja existente;
 - `destroy-infra`: remove Function, Log Group, IAM, security group da Lambda e limpa os outputs publicados nos repos dependentes.
 
 O `destroy-infra` exige `confirm_destroy=DESTROY` e aprovacao do GitHub Environment. Esse fluxo deve ser executado depois do destroy do banco e antes do destroy final da VPC no repo `oficina-dgcar-infra-k8s`. O banco sai antes porque o security group do RDS referencia o security group da Lambda como origem autorizada para PostgreSQL. A limpeza dos outputs publicados e idempotente: secrets `AUTH_LAMBDA_*` ausentes sao registrados como ja removidos e nao interrompem o teardown.

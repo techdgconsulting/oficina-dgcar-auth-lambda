@@ -199,10 +199,10 @@ jobs:
 
   deploy-code:
     name: deploy-code
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy-code'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'deploy-code')
     needs: validate
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || (github.ref_name == 'main' && 'prod' || 'homolog') }}
 
     steps:
       - name: Checkout repository
