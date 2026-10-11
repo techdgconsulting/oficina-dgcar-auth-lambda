@@ -171,7 +171,7 @@ jobs:
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
-          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || '' }}
+          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || 'status_cliente' }}
           TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
         run: terraform apply -auto-approve
 
@@ -294,7 +294,7 @@ jobs:
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
-          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || '' }}
+          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || 'status_cliente' }}
           TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
         run: terraform destroy -target=aws_lambda_function.auth_cpf -auto-approve
 
@@ -333,7 +333,7 @@ jobs:
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
           TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
-          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || '' }}
+          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || 'status_cliente' }}
           TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
         run: terraform destroy -auto-approve
 

@@ -24,7 +24,7 @@ Este repositorio mantem apenas a documentacao especifica da Lambda Auth CPF + Se
 
 ## Contrato HTTP
 
-Endpoint previsto no API Gateway:
+Endpoint exposto pelo API Gateway:
 
 ```http
 POST /auth/cpf
@@ -80,9 +80,10 @@ coluna_id=id
 coluna_documento=documento
 coluna_senha_hash=senha_hash
 status_padrao=ATIVO
+coluna_status=status_cliente
 ```
 
-Quando a coluna de status do cliente existir no banco, a configuracao prevista e:
+Configuracao de status usada no banco:
 
 ```text
 CLIENT_STATUS_COLUMN=status_cliente
@@ -123,11 +124,11 @@ Consulta de cliente:
 - `CLIENT_ID_COLUMN`, padrao `id`;
 - `CLIENT_DOCUMENT_COLUMN`, padrao `documento`;
 - `CLIENT_PASSWORD_HASH_COLUMN`, padrao `senha_hash`;
-- `CLIENT_STATUS_COLUMN`, opcional;
+- `CLIENT_STATUS_COLUMN`, padrao `status_cliente`;
 - `CLIENT_DEFAULT_STATUS`, padrao `ATIVO`;
 - `CLIENT_ALLOWED_STATUSES`, padrao `ATIVO`.
 
-Enquanto o banco nao possui `status_cliente`, `CLIENT_STATUS_COLUMN` permanece vazio e `CLIENT_DEFAULT_STATUS=ATIVO` e usado como status padrao. Quando a coluna for criada, a configuracao esperada passa a ser `CLIENT_STATUS_COLUMN=status_cliente`.
+O banco possui `clientes.status_cliente`. `CLIENT_DEFAULT_STATUS` permanece apenas como compatibilidade para ambientes legados em que `CLIENT_STATUS_COLUMN` seja esvaziado explicitamente.
 
 JWT:
 
@@ -331,9 +332,9 @@ foreach ($envName in @('homolog', 'prod')) {
   --env prod
 ```
 
-### Secrets Pendentes
+### Secrets Necessarios Para `apply-infra`
 
-O `apply-infra` permanece bloqueado operacionalmente ate que estes secrets existam no environment escolhido:
+O `apply-infra` requer estes secrets no environment escolhido:
 
 ```text
 VPC_ID
@@ -372,7 +373,7 @@ DB_SSL=true
 LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS=[]
 ```
 
-`CLIENT_STATUS_COLUMN` tambem e opcional. Enquanto o modelo relacional nao possui coluna de status do cliente, o valor permanece vazio e `CLIENT_DEFAULT_STATUS=ATIVO` e usado.
+`CLIENT_STATUS_COLUMN` deve apontar para `status_cliente`. `CLIENT_DEFAULT_STATUS` e mantido apenas como fallback para execucoes legadas.
 
 ### Matriz De Origem Dos Secrets
 
@@ -393,7 +394,7 @@ LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS=[]
 | `DB_USERNAME` | Variavel usada no RDS | Antes ou depois do apply do RDS | `oficina-dgcar-auth-lambda` |
 | `DB_PASSWORD` | Variavel usada no RDS | Antes ou depois do apply do RDS | `oficina-dgcar-auth-lambda` |
 | `DB_SSL` | Politica de conexao com RDS | Antes do `apply-infra` | `oficina-dgcar-auth-lambda` |
-| `CLIENT_STATUS_COLUMN` | Modelo relacional | Quando a coluna de status existir | `oficina-dgcar-auth-lambda` |
+| `CLIENT_STATUS_COLUMN` | Modelo relacional | Valor padrao `status_cliente` | `oficina-dgcar-auth-lambda` |
 | `CLIENT_JWT_SECRET` | Segredo externo de cliente | Antes do `apply-infra` | GitHub Environments `homolog` e `prod` |
 | `AUTH_LAMBDA_FUNCTION_NAME` | Output `auth_lambda_function_name` | Depois do `apply-infra` da Lambda | `oficina-dgcar-auth-lambda` e `oficina-dgcar-infra-k8s` |
 | `AUTH_LAMBDA_INVOKE_ARN` | Output `auth_lambda_invoke_arn` | Depois do `apply-infra` da Lambda | `oficina-dgcar-infra-k8s` |
@@ -473,7 +474,7 @@ Secrets esperados para `apply-infra`:
 - `DB_PASSWORD`;
 - `DB_SSL`;
 - `CLIENT_PASSWORD_HASH_COLUMN`, padrao `senha_hash`;
-- `CLIENT_STATUS_COLUMN`, opcional;
+- `CLIENT_STATUS_COLUMN`, padrao `status_cliente`;
 - `CLIENT_JWT_SECRET`.
 
 Secrets esperados para `deploy-code`:
