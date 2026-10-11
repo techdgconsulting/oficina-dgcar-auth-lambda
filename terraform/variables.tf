@@ -138,9 +138,9 @@ variable "client_password_hash_column" {
 }
 
 variable "client_status_column" {
-  description = "Client status column name. Keep empty until status_cliente exists."
+  description = "Client status column name used to allow or block external authentication."
   type        = string
-  default     = ""
+  default     = "status_cliente"
 }
 
 variable "client_default_status" {
