@@ -1,21 +1,55 @@
 # oficina-dgcar-auth-lambda
 
-Lambda de autenticacao externa por CPF para clientes da Oficina Mecanica DGCar.
+Lambda de autenticacao externa por CPF e senha para clientes da Oficina Mecanica DGCar.
 
 ## Proposito
 
 Este repositorio contem a Function Serverless implementada para:
 
-- receber CPF informado pelo cliente externo;
+- receber CPF e senha informados pelo cliente externo;
 - validar formato e digitos do CPF;
 - consultar o cliente no PostgreSQL gerenciado;
 - verificar existencia e status do cliente;
+- validar a senha contra hash armazenado no banco;
 - emitir JWT externo com `tipo=CLIENTE`;
 - separar o JWT de cliente do JWT interno usado por `ATENDENTE`, `MECANICO` e `GESTOR`.
 
+## Tecnologias
+
+- Node.js 20.x;
+- AWS Lambda;
+- AWS API Gateway HTTP API;
+- PostgreSQL;
+- Terraform;
+- GitHub Actions;
+- Jest;
+- bcrypt;
+- jsonwebtoken.
+
+## Documentacao Central
+
+A documentacao arquitetural completa do Tech Challenge 3 esta centralizada em:
+
+[oficina-dgcar-docs](https://github.com/techdgconsulting/oficina-dgcar-docs)
+
+Este repositorio mantem apenas a documentacao especifica da Lambda Auth CPF + Senha, incluindo contrato, variaveis, Terraform, pipeline e deploy da funcao.
+
+## Diagrama Da Arquitetura Do Repositorio
+
+```mermaid
+flowchart LR
+  cliente[Cliente externo] --> gateway[API Gateway<br/>POST /auth/cpf]
+  gateway --> lambda[Lambda Auth CPF + Senha<br/>Node.js 20.x]
+  lambda --> rds[(RDS PostgreSQL<br/>clientes)]
+  lambda --> jwt[JWT CLIENTE<br/>tipo=CLIENTE]
+  jwt --> api[oficina-dgcar-api<br/>rotas protegidas]
+```
+
+Este repositorio e responsavel somente pela autenticacao externa de clientes. A API Spring valida o JWT emitido por esta Lambda, mas o login interno de funcionarios permanece na aplicacao principal.
+
 ## Contrato HTTP
 
-Endpoint previsto no API Gateway:
+Endpoint exposto pelo API Gateway:
 
 ```http
 POST /auth/cpf
@@ -26,7 +60,8 @@ Entrada:
 
 ```json
 {
-  "cpf": "529.982.247-25"
+  "cpf": "529.982.247-25",
+  "senha": "Cliente@123"
 }
 ```
 
@@ -43,8 +78,10 @@ Resposta `200`:
 Erros esperados:
 
 - `400 CPF_INVALIDO`: CPF com formato ou digitos invalidos.
+- `400 SENHA_OBRIGATORIA`: senha ausente ou em formato invalido.
 - `400 JSON_INVALIDO`: corpo da requisicao nao e JSON valido.
 - `404 CLIENTE_NAO_ENCONTRADO`: CPF valido sem cliente cadastrado.
+- `401 CREDENCIAIS_INVALIDAS`: CPF existente com senha incorreta ou hash ausente.
 - `403 CLIENTE_SEM_ACESSO`: cliente existe, mas status nao permite autenticacao.
 - `500 ERRO_INTERNO`: falha inesperada de banco, token ou configuracao.
 
@@ -54,6 +91,8 @@ Regras de contrato implementadas:
 - o CPF possui validacao de tamanho, formato e digitos verificadores;
 - o cliente e consultado na tabela configurada por variaveis de ambiente;
 - a autenticacao depende da existencia do cliente;
+- CPF sozinho nao autentica cliente externo;
+- a senha recebida e comparada com o hash configurado por `CLIENT_PASSWORD_HASH_COLUMN`;
 - o status do cliente e validado contra `CLIENT_ALLOWED_STATUSES`;
 - o JWT externo sempre e emitido com `tipo=CLIENTE`;
 - o JWT externo nao carrega roles internas da oficina.
@@ -64,10 +103,12 @@ Query de cliente padrao:
 tabela=clientes
 coluna_id=id
 coluna_documento=documento
+coluna_senha_hash=senha_hash
 status_padrao=ATIVO
+coluna_status=status_cliente
 ```
 
-Quando a coluna de status do cliente existir no banco, a configuracao prevista e:
+Configuracao de status usada no banco:
 
 ```text
 CLIENT_STATUS_COLUMN=status_cliente
@@ -107,11 +148,12 @@ Consulta de cliente:
 - `CLIENT_TABLE`, padrao `clientes`;
 - `CLIENT_ID_COLUMN`, padrao `id`;
 - `CLIENT_DOCUMENT_COLUMN`, padrao `documento`;
-- `CLIENT_STATUS_COLUMN`, opcional;
+- `CLIENT_PASSWORD_HASH_COLUMN`, padrao `senha_hash`;
+- `CLIENT_STATUS_COLUMN`, padrao `status_cliente`;
 - `CLIENT_DEFAULT_STATUS`, padrao `ATIVO`;
 - `CLIENT_ALLOWED_STATUSES`, padrao `ATIVO`.
 
-Enquanto o banco nao possui `status_cliente`, `CLIENT_STATUS_COLUMN` permanece vazio e `CLIENT_DEFAULT_STATUS=ATIVO` e usado como status padrao. Quando a coluna for criada, a configuracao esperada passa a ser `CLIENT_STATUS_COLUMN=status_cliente`.
+O banco possui `clientes.status_cliente`. `CLIENT_DEFAULT_STATUS` permanece apenas como compatibilidade para ambientes legados em que `CLIENT_STATUS_COLUMN` seja esvaziado explicitamente.
 
 JWT:
 
@@ -131,8 +173,17 @@ npm run package
 Para simular chamada local:
 
 ```bash
-node -e "const { handler } = require('./src/handler'); handler({ body: JSON.stringify({ cpf: '529.982.247-25' }) }).then(console.log)"
+node -e "const { handler } = require('./src/handler'); handler({ body: JSON.stringify({ cpf: '529.982.247-25', senha: 'Cliente@123' }) }).then(console.log)"
 ```
+
+## Swagger E Postman
+
+Esta Lambda nao possui Swagger proprio porque e exposta como integracao serverless do API Gateway. A validacao demonstravel fica na collection oficial da API:
+
+- Endpoint: `${OFICINA_PUBLIC_BASE_URL}/auth/cpf`
+- Collection Postman: [`oficina-dgcar-api/postman/Oficina-DGCar-Tech-Challenge-Fase-3.postman_collection.json`](https://github.com/techdgconsulting/oficina-dgcar-api/blob/homolog/postman/Oficina-DGCar-Tech-Challenge-Fase-3.postman_collection.json)
+- Swagger da API consumidora: `${OFICINA_PUBLIC_BASE_URL}/swagger-ui.html`
+- `OFICINA_PUBLIC_BASE_URL` e publicado pelo provisionamento do `oficina-dgcar-infra-k8s` e muda quando o API Gateway e recriado.
 
 ## Pipeline
 
@@ -146,7 +197,12 @@ Pull Requests e pushes executam:
 - validacao Terraform;
 - `terraform plan -refresh=false` offline.
 
-Deploy real ocorre apenas por `workflow_dispatch`, usando o environment `homolog` ou `prod`.
+Deploy do codigo ocorre automaticamente em push nas branches protegidas:
+
+- `homolog` atualiza a Lambda no environment `homolog`;
+- `main` atualiza a Lambda no environment `prod`.
+
+`workflow_dispatch` permanece disponivel para reprocessamento operacional controlado.
 
 Acoes manuais disponiveis:
 
