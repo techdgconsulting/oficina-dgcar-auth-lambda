@@ -1,3 +1,4 @@
+const bcrypt = require("bcryptjs");
 const { isValidCpf, normalizeCpf } = require("./cpf");
 const { findClientByCpf } = require("./clientRepository");
 const { createClientToken } = require("./tokenService");
@@ -21,6 +22,7 @@ async function handler(event) {
   try {
     const payload = parseJsonBody(event);
     const cpf = normalizeCpf(payload.cpf);
+    const senha = typeof payload.senha === "string" ? payload.senha : "";
     maskedCpf = maskCpf(cpf);
 
     if (!isValidCpf(cpf)) {
@@ -35,6 +37,18 @@ async function handler(event) {
       });
     }
 
+    if (!senha.trim()) {
+      logWarn("auth_cpf_failed", {
+        correlationId,
+        cpf: maskedCpf,
+        reason: "SENHA_OBRIGATORIA"
+      });
+      return response(400, {
+        error: "SENHA_OBRIGATORIA",
+        message: "Senha obrigatoria para autenticacao do cliente."
+      });
+    }
+
     const client = await findClientByCpf(cpf);
     if (!client) {
       logWarn("auth_cpf_failed", {
@@ -45,6 +59,19 @@ async function handler(event) {
       return response(404, {
         error: "CLIENTE_NAO_ENCONTRADO",
         message: "Cliente nao encontrado para o CPF informado."
+      });
+    }
+
+    if (!client.senhaHash || !(await bcrypt.compare(senha, client.senhaHash))) {
+      logWarn("auth_cpf_failed", {
+        correlationId,
+        cpf: maskedCpf,
+        clienteId: client.clienteId,
+        reason: "CREDENCIAIS_INVALIDAS"
+      });
+      return response(401, {
+        error: "CREDENCIAIS_INVALIDAS",
+        message: "CPF ou senha invalidos."
       });
     }
 

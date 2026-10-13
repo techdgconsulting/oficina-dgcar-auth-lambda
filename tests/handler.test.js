@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 
 jest.mock("../src/clientRepository", () => ({
   findClientByCpf: jest.fn()
@@ -8,6 +9,8 @@ const { findClientByCpf } = require("../src/clientRepository");
 const { handler } = require("../src/handler");
 
 const jwtSecret = "01234567890123456789012345678901";
+const senhaValida = "Cliente@123";
+const senhaHash = bcrypt.hashSync(senhaValida, 10);
 
 describe("auth CPF handler", () => {
   let logSpy;
@@ -47,7 +50,7 @@ describe("auth CPF handler", () => {
   test("returns 404 when client does not exist", async () => {
     findClientByCpf.mockResolvedValue(null);
 
-    const response = await handler(event({ cpf: "529.982.247-25" }));
+    const response = await handler(event({ cpf: "529.982.247-25", senha: senhaValida }));
 
     expect(response.statusCode).toBe(404);
     expect(JSON.parse(response.body).error).toBe("CLIENTE_NAO_ENCONTRADO");
@@ -60,13 +63,48 @@ describe("auth CPF handler", () => {
     });
   });
 
+  test("returns 400 when password is missing", async () => {
+    const response = await handler(event({ cpf: "529.982.247-25" }));
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body).error).toBe("SENHA_OBRIGATORIA");
+    expect(findClientByCpf).not.toHaveBeenCalled();
+    expect(lastLog()).toMatchObject({
+      level: "warn",
+      message: "auth_cpf_failed",
+      cpf: "***.***.***-25",
+      reason: "SENHA_OBRIGATORIA"
+    });
+  });
+
+  test("returns 401 when password is invalid", async () => {
+    findClientByCpf.mockResolvedValue({
+      clienteId: 10,
+      senhaHash,
+      status: "ATIVO"
+    });
+
+    const response = await handler(event({ cpf: "529.982.247-25", senha: "SenhaErrada@123" }));
+
+    expect(response.statusCode).toBe(401);
+    expect(JSON.parse(response.body).error).toBe("CREDENCIAIS_INVALIDAS");
+    expect(lastLog()).toMatchObject({
+      level: "warn",
+      message: "auth_cpf_failed",
+      cpf: "***.***.***-25",
+      clienteId: 10,
+      reason: "CREDENCIAIS_INVALIDAS"
+    });
+  });
+
   test("returns 403 for blocked client status", async () => {
     findClientByCpf.mockResolvedValue({
       clienteId: 10,
+      senhaHash,
       status: "BLOQUEADO"
     });
 
-    const response = await handler(event({ cpf: "529.982.247-25" }));
+    const response = await handler(event({ cpf: "529.982.247-25", senha: senhaValida }));
 
     expect(response.statusCode).toBe(403);
     expect(JSON.parse(response.body).error).toBe("CLIENTE_SEM_ACESSO");
@@ -82,10 +120,11 @@ describe("auth CPF handler", () => {
   test("returns client JWT with external claims", async () => {
     findClientByCpf.mockResolvedValue({
       clienteId: 10,
+      senhaHash,
       status: "ATIVO"
     });
 
-    const response = await handler(event({ cpf: "529.982.247-25" }));
+    const response = await handler(event({ cpf: "529.982.247-25", senha: senhaValida }));
     const body = JSON.parse(response.body);
     const decoded = jwt.verify(body.accessToken, jwtSecret, {
       issuer: "oficina-dgcar-auth-lambda",
@@ -132,11 +171,12 @@ describe("auth CPF handler", () => {
   test("keeps incoming correlation id in response and logs", async () => {
     findClientByCpf.mockResolvedValue({
       clienteId: 10,
+      senhaHash,
       status: "ATIVO"
     });
 
     const response = await handler(event(
-      { cpf: "529.982.247-25" },
+      { cpf: "529.982.247-25", senha: senhaValida },
       { "X-Correlation-Id": "corr-123" }
     ));
 
@@ -153,11 +193,12 @@ describe("auth CPF handler", () => {
     delete process.env.CLIENT_JWT_SECRET;
     findClientByCpf.mockResolvedValue({
       clienteId: 10,
+      senhaHash,
       status: "ATIVO"
     });
 
     const response = await handler(event(
-      { cpf: "529.982.247-25" },
+      { cpf: "529.982.247-25", senha: senhaValida },
       { "X-Correlation-Id": "corr-config" }
     ));
 
