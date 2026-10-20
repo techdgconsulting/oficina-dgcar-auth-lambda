@@ -12,3 +12,8 @@ coverage/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local CI validation and Terraform saved plans
+__pycache__/
+*.tfplan
+*-plan.json
