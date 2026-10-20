@@ -62,7 +62,7 @@ O pacote é gerado em `dist/auth-cpf-lambda.zip`. Os testes automatizados não e
 | `CLIENT_JWT_SECRET` | Segredo HS256 adequado, igual ao usado pela API no mesmo ambiente |
 | `CLIENT_JWT_ISSUER`, `CLIENT_JWT_AUDIENCE`, `CLIENT_JWT_EXPIRES_IN` | Padrões `oficina-dgcar-auth-lambda`, `oficina-dgcar-api`, `15m` |
 
-A migration V18 da API cria `clientes.status_cliente`. O Terraform e o workflow usam essa coluna por padrão. O código admite `CLIENT_STATUS_COLUMN` vazio para consultar o status padrão em execuções locais; em ambientes provisionados, mantenha `status_cliente` para validar o status persistido.
+A migration V18 da API cria `clientes.status_cliente`. Para consultar essa coluna, configure `CLIENT_STATUS_COLUMN=status_cliente`. O código, o exemplo `.env`, o padrão Terraform e o fallback do workflow deixam essa opção vazia quando não informada. Nesse caso, a consulta utiliza `CLIENT_DEFAULT_STATUS`, sem ler o status persistido. A existência da coluna não altera automaticamente a configuração da Lambda.
 
 Para simular o evento sem imprimir o token retornado, configure `TEST_CLIENT_CPF` e `TEST_CLIENT_PASSWORD` no ambiente local e execute:
 
@@ -89,7 +89,7 @@ O provisionamento completo continua manual e mantém a ordem rede → banco → 
 
 Para `deploy-code`, são necessários acesso AWS e `AUTH_LAMBDA_FUNCTION_NAME`. Ele não atualiza as variáveis de ambiente da função; essas pertencem ao apply de infraestrutura.
 
-O apply publica `AUTH_LAMBDA_FUNCTION_NAME` neste repositório, nome/ARN/invoke ARN em infra-k8s e o security group em infra-db. O Terraform também expõe o security group da Lambda, usado para autorizar a conexão PostgreSQL. A integração de `POST /auth/cpf` é aplicada pela infraestrutura do Gateway.
+O apply publica `AUTH_LAMBDA_FUNCTION_NAME` neste repositório e nome, ARN e invoke ARN no repositório infra-k8s. O Terraform também expõe o security group da Lambda, usado para autorizar a conexão PostgreSQL. A integração de `POST /auth/cpf` é aplicada pela infraestrutura do Gateway.
 
 ### Validação local do Terraform
 
