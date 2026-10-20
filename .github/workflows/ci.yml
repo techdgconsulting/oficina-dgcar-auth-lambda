@@ -1,5 +1,7 @@
 name: Auth CPF Lambda
 
+run-name: "${{ github.workflow }} | ${{ inputs.parent_run_id || github.run_id }} | ${{ inputs.orchestrated && inputs.source_sha || github.sha }}"
+
 on:
   pull_request:
     branches:
@@ -9,6 +11,13 @@ on:
     branches:
       - main
       - homolog
+    paths:
+      - "src/**"
+      - "terraform/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/**"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
     inputs:
       action:
@@ -29,23 +38,70 @@ on:
         options:
           - homolog
           - prod
+
       confirm_destroy:
         description: "Type DESTROY to confirm Lambda teardown"
-        required: false
-        default: ""
+        type: string
+      orchestrated:
+        description: "Reserved for the environment coordinator"
+        type: boolean
+        default: false
+      parent_run_id:
+        description: "Environment coordinator run ID"
+        type: string
+      source_sha:
+        description: "Validated source commit"
         type: string
 
 permissions:
   contents: read
 
 jobs:
+  authorize:
+    name: Authorize deployment source
+    if: github.event_name == 'workflow_dispatch' && inputs.orchestrated && (github.ref_name == 'homolog' || github.ref_name == 'main')
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Authorize protected source before checkout and tests
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: "${{ inputs.action }}"
+        run: python3 scripts/ci/deployment.py worker
+
   validate:
+    needs: authorize
+    if: ${{ !cancelled() && ((inputs.orchestrated && needs.authorize.result == 'success') || (!inputs.orchestrated && needs.authorize.result == 'skipped')) }}
     name: validate
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require promotion from homolog history
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          STATUS="$(gh api "repos/$GITHUB_REPOSITORY/compare/homolog...$HEAD_SHA" --jq '.status')"
+          case "$STATUS" in
+            ahead|identical) echo "Histórico de homolog preservado para promoção." ;;
+            *) echo "::error::Atualize a PR com homolog antes de promover para main."; exit 1 ;;
+          esac
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
+
+      - name: Validate deployment safeguards
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -115,7 +171,7 @@ jobs:
 
   apply-infra:
     name: apply-infra
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply-infra'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply-infra' && inputs.orchestrated
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
@@ -123,6 +179,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
+
+      - name: Authorize environment coordinator
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: "${{ inputs.action }}"
+        run: python3 scripts/ci/deployment.py worker
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -173,7 +240,11 @@ jobs:
           TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
           TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || 'status_cliente' }}
           TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
-        run: terraform apply -auto-approve
+        run: |
+          terraform plan -input=false -out=deployment.tfplan
+          terraform show -json deployment.tfplan > deployment-plan.json
+          python3 ../scripts/ci/deployment.py plan deployment-plan.json
+          terraform apply -input=false deployment.tfplan
 
       - name: Publish Lambda outputs to dependent repositories
         working-directory: terraform
@@ -194,12 +265,11 @@ jobs:
           gh secret set AUTH_LAMBDA_FUNCTION_NAME --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_NAME"
           gh secret set AUTH_LAMBDA_FUNCTION_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_FUNCTION_ARN"
           gh secret set AUTH_LAMBDA_INVOKE_ARN --repo "$INFRA_K8S_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_INVOKE_ARN"
-
           gh secret set AUTH_LAMBDA_SECURITY_GROUP_ID --repo "$INFRA_DB_REPO" --env "$TARGET_ENVIRONMENT" --body "$AUTH_LAMBDA_SECURITY_GROUP_ID"
 
   deploy-code:
     name: deploy-code
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy-code'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy-code' && inputs.orchestrated
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
@@ -207,6 +277,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
+
+      - name: Authorize environment coordinator
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: "${{ inputs.action }}"
+        run: python3 scripts/ci/deployment.py worker
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -233,9 +314,25 @@ jobs:
             --function-name "${{ secrets.AUTH_LAMBDA_FUNCTION_NAME }}" \
             --zip-file fileb://dist/auth-cpf-lambda.zip
 
+  request-deployment:
+    name: Queue environment update
+    needs: validate
+    if: ${{ !cancelled() && needs.validate.result == 'success' && ((github.ref_name == 'homolog' || github.ref_name == 'main') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.orchestrated && (inputs.action == 'apply-infra' || inputs.action == 'deploy-code')))) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'prod' || 'homolog') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Request coordinated deployment
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'prod' || 'homolog') }}
+          SOURCE_SHA: ${{ github.sha }}
+          COMPONENT: ${{ inputs.action == 'deploy-code' && 'lambda-code' || 'lambda' }}
+        run: python3 scripts/ci/deployment.py request
+
   destroy-infra:
     name: destroy-infra
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy-infra' && inputs.confirm_destroy == 'DESTROY'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy-infra' && inputs.confirm_destroy == 'DESTROY' && inputs.orchestrated
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
@@ -243,6 +340,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
+
+      - name: Authorize environment coordinator
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: destroy-infra
+        run: python3 scripts/ci/deployment.py worker
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -318,7 +426,7 @@ jobs:
             exit 1
           fi
 
-          SECURITY_GROUP_ID="$SECURITY_GROUP_ID" ../scripts/aws/wait-security-group-release.sh
+          SECURITY_GROUP_ID="$SECURITY_GROUP_ID" bash ../scripts/aws/wait-security-group-release.sh
 
       - name: Terraform destroy remaining infrastructure
         working-directory: terraform
@@ -373,3 +481,11 @@ jobs:
           delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_FUNCTION_ARN
           delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_INVOKE_ARN
           delete_secret_if_present "$INFRA_DB_REPO" AUTH_LAMBDA_SECURITY_GROUP_ID
+
+  require-destroy-coordinator:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy-infra' && !inputs.orchestrated
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::Use Destroy Ambiente Homolog/Prod no repositório infra-k8s, com confirmação explícita."
+          exit 1
