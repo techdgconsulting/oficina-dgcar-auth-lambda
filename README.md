@@ -74,19 +74,18 @@ A função abre conexão com o banco; um RDS privado não fica acessível soment
 
 ## CI/CD e deploy
 
-O workflow [Auth CPF Lambda](.github/workflows/ci.yml) executa validação em PRs e pushes para `homolog` e `main`: instalação, lint, testes, auditoria das dependências de produção, pacote e validação/plano Terraform. **Push não executa apply-infra nem deploy-code.**
+O workflow [Auth CPF Lambda](.github/workflows/ci.yml) valida PRs com lint, testes, auditoria, pacote e Terraform. Após merge em `homolog` ou `main`, mudanças em código, dependências, scripts, Terraform ou no workflow solicitam automaticamente `apply-infra` ao coordenador de infra-k8s. README e demais documentos não disparam deploy. A atualização inclui o pacote e as configurações da função, sem reprovisionar os demais componentes.
 
-As operações reais usam `workflow_dispatch`, manualmente ou pela orquestração de infra-k8s:
-
-| Action | Resultado |
+| Operação manual | Comportamento |
 |---|---|
-| `package` | Valida e gera artefato, sem deploy |
-| `apply-infra` | Após validação, cria ou atualiza função, rede, IAM e log group pelo Terraform; inclui o pacote |
-| `deploy-code` | Após validação, atualiza o código de uma função existente usando o ZIP |
+| `package` | Valida e empacota, sem deploy |
+| `apply-infra` | Solicita atualização da função e do Terraform na fila central |
+| `deploy-code` | Solicita apenas atualização do ZIP de uma função existente na mesma fila |
+| `destroy-infra` | Worker reservado ao workflow central de remoção, com confirmação explícita |
 
-Em **Actions → Auth CPF Lambda → Run workflow**, escolha a referência, `environment=homolog` ou `prod` e a action. A orquestração completa usa homolog para homolog e main para prod, respeitando as configurações dos GitHub Environments.
+Em **Actions → Auth CPF Lambda → Run workflow**, use `homolog/environment=homolog` ou `main/environment=prod`. `orchestrated`, `parent_run_id` e `source_sha` são preenchidos pelo coordenador. O worker verifica o ambiente, o commit e a execução pai antes de acessar a AWS. O plano Terraform é salvo e conferido antes do apply; remoções e substituições bloqueiam a atualização e exigem revisão. Use **Destruir Ambiente Homolog/Prod** em infra-k8s para remoção manual.
 
-Para `apply-infra`, configure credenciais AWS, `AWS_REGION`, state S3 (`TF_STATE_BUCKET`, `TF_STATE_KEY`), `VPC_ID`, `PRIVATE_SUBNET_IDS` em JSON, conexão `DB_*`, `CLIENT_JWT_SECRET` e `GH_AUTOMATION_TOKEN`. `LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS` é opcional; `CLIENT_STATUS_COLUMN` é repassado do secret quando definido. Os secrets de conexão precisam estar preenchidos: a execução do workflow não descobre automaticamente o host e as credenciais do RDS.
+O provisionamento completo continua manual e mantém a ordem rede → banco → Lambda → integrações → API. A fila por ambiente também coordena operações de manutenção. PRs de produção devem conter o histórico de homolog. Consulte a [ADR-020](https://github.com/techdgconsulting/oficina-dgcar-docs/blob/homolog/docs/adr/ADR-020-promocao-e-deploy-automatico.md).
 
 Para `deploy-code`, são necessários acesso AWS e `AUTH_LAMBDA_FUNCTION_NAME`. Ele não atualiza as variáveis de ambiente da função; essas pertencem ao apply de infraestrutura.
 

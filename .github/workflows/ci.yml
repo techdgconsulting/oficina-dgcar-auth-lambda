@@ -1,5 +1,7 @@
 name: Auth CPF Lambda
 
+run-name: "${{ github.workflow }} | ${{ inputs.parent_run_id || github.run_id }} | ${{ inputs.source_sha || github.sha }}"
+
 on:
   pull_request:
     branches:
@@ -9,6 +11,13 @@ on:
     branches:
       - main
       - homolog
+    paths:
+      - "src/**"
+      - "terraform/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/**"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
     inputs:
       action:
@@ -20,6 +29,7 @@ on:
           - package
           - apply-infra
           - deploy-code
+          - destroy-infra
       environment:
         description: "Target environment"
         required: true
@@ -28,6 +38,20 @@ on:
         options:
           - homolog
           - prod
+
+      confirm_destroy:
+        description: "Type DESTROY to confirm Lambda teardown"
+        type: string
+      orchestrated:
+        description: "Reserved for the environment coordinator"
+        type: boolean
+        default: false
+      parent_run_id:
+        description: "Environment coordinator run ID"
+        type: string
+      source_sha:
+        description: "Validated source commit"
+        type: string
 
 permissions:
   contents: read
@@ -38,8 +62,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require promotion from homolog history
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          STATUS="$(gh api "repos/$GITHUB_REPOSITORY/compare/homolog...$HEAD_SHA" --jq '.status')"
+          case "$STATUS" in
+            ahead|identical) echo "Histórico de homolog preservado para promoção." ;;
+            *) echo "::error::Atualize a PR com homolog antes de promover para main."; exit 1 ;;
+          esac
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+
+      - name: Validate deployment safeguards
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -109,7 +151,7 @@ jobs:
 
   apply-infra:
     name: apply-infra
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply-infra'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply-infra' && inputs.orchestrated
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
@@ -117,6 +159,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+
+      - name: Authorize environment coordinator
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: "${{ inputs.action }}"
+        run: python3 scripts/ci/deployment.py worker
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -167,7 +220,11 @@ jobs:
           TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
           TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || '' }}
           TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
-        run: terraform apply -auto-approve
+        run: |
+          terraform plan -input=false -out=deployment.tfplan
+          terraform show -json deployment.tfplan > deployment-plan.json
+          python3 ../scripts/ci/deployment.py plan deployment-plan.json
+          terraform apply -input=false deployment.tfplan
 
       - name: Publish Lambda outputs to dependent repositories
         working-directory: terraform
@@ -189,7 +246,7 @@ jobs:
 
   deploy-code:
     name: deploy-code
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy-code'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy-code' && inputs.orchestrated
     needs: validate
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
@@ -197,6 +254,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+
+      - name: Authorize environment coordinator
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: "${{ inputs.action }}"
+        run: python3 scripts/ci/deployment.py worker
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -222,3 +290,179 @@ jobs:
           aws lambda update-function-code \
             --function-name "${{ secrets.AUTH_LAMBDA_FUNCTION_NAME }}" \
             --zip-file fileb://dist/auth-cpf-lambda.zip
+
+  request-deployment:
+    name: Queue environment update
+    needs: validate
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.orchestrated && (inputs.action == 'apply-infra' || inputs.action == 'deploy-code'))
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'prod' || 'homolog') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Request coordinated deployment
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'prod' || 'homolog') }}
+          SOURCE_SHA: ${{ github.sha }}
+          COMPONENT: ${{ inputs.action == 'deploy-code' && 'lambda-code' || 'lambda' }}
+        run: python3 scripts/ci/deployment.py request
+
+  destroy-infra:
+    name: destroy-infra
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy-infra' && inputs.confirm_destroy == 'DESTROY' && inputs.orchestrated
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+
+      - name: Authorize environment coordinator
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: destroy-infra
+        run: python3 scripts/ci/deployment.py worker
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      - name: Package Lambda for Terraform state refresh
+        run: npm run package
+
+      - name: Prepare shell scripts
+        run: find scripts -type f -name "*.sh" -exec chmod +x {} \;
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Terraform init with remote state
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
+            -backend-config="region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Destroy Lambda function
+        working-directory: terraform
+        env:
+          TF_VAR_environment: ${{ inputs.environment }}
+          TF_VAR_vpc_id: ${{ secrets.VPC_ID }}
+          TF_VAR_subnet_ids: ${{ secrets.PRIVATE_SUBNET_IDS }}
+          TF_VAR_additional_security_group_ids: ${{ secrets.LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS || '[]' }}
+          TF_VAR_db_host: ${{ secrets.DB_HOST }}
+          TF_VAR_db_port: ${{ secrets.DB_PORT || '5432' }}
+          TF_VAR_db_name: ${{ secrets.DB_NAME }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
+          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || 'status_cliente' }}
+          TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
+        run: terraform destroy -target=aws_lambda_function.auth_cpf -auto-approve
+
+      - name: Wait Lambda security group release
+        working-directory: terraform
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+
+          if ! terraform state list | grep -Fxq aws_security_group.lambda; then
+            echo "Security group da Lambda ja estava ausente do state."
+            exit 0
+          fi
+
+          SECURITY_GROUP_ID="$(terraform state show aws_security_group.lambda \
+            | awk -F' = ' '/^[[:space:]]*id[[:space:]]*=/{gsub(/"/, "", $2); print $2; exit}')"
+
+          if [ -z "$SECURITY_GROUP_ID" ]; then
+            echo "::error::Security group da Lambda nao encontrado no state."
+            exit 1
+          fi
+
+          SECURITY_GROUP_ID="$SECURITY_GROUP_ID" bash ../scripts/aws/wait-security-group-release.sh
+
+      - name: Terraform destroy remaining infrastructure
+        working-directory: terraform
+        env:
+          TF_VAR_environment: ${{ inputs.environment }}
+          TF_VAR_vpc_id: ${{ secrets.VPC_ID }}
+          TF_VAR_subnet_ids: ${{ secrets.PRIVATE_SUBNET_IDS }}
+          TF_VAR_additional_security_group_ids: ${{ secrets.LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS || '[]' }}
+          TF_VAR_db_host: ${{ secrets.DB_HOST }}
+          TF_VAR_db_port: ${{ secrets.DB_PORT || '5432' }}
+          TF_VAR_db_name: ${{ secrets.DB_NAME }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_ssl: ${{ secrets.DB_SSL || 'true' }}
+          TF_VAR_client_status_column: ${{ secrets.CLIENT_STATUS_COLUMN || 'status_cliente' }}
+          TF_VAR_client_jwt_secret: ${{ secrets.CLIENT_JWT_SECRET }}
+        run: terraform destroy -auto-approve
+
+      - name: Remove published Lambda outputs
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          AUTH_LAMBDA_REPO: techdgconsulting/oficina-dgcar-auth-lambda
+          INFRA_K8S_REPO: techdgconsulting/oficina-dgcar-infra-k8s
+          INFRA_DB_REPO: techdgconsulting/oficina-dgcar-infra-db
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_AUTOMATION_TOKEN nao configurado. Outputs publicados serao mantidos."
+            exit 0
+          fi
+
+          delete_secret_if_present() {
+            local repo="$1"
+            local secret_name="$2"
+            local secret_names
+
+            secret_names="$(gh secret list --repo "$repo" --env "$TARGET_ENVIRONMENT" --json name -q '.[].name')"
+
+            if printf '%s\n' "$secret_names" | grep -Fxq "$secret_name"; then
+              gh secret delete "$secret_name" --repo "$repo" --env "$TARGET_ENVIRONMENT"
+              echo "Output $secret_name removido de $repo/$TARGET_ENVIRONMENT."
+            else
+              echo "Output $secret_name ja estava ausente em $repo/$TARGET_ENVIRONMENT."
+            fi
+          }
+
+          delete_secret_if_present "$AUTH_LAMBDA_REPO" AUTH_LAMBDA_FUNCTION_NAME
+          delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_FUNCTION_NAME
+          delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_FUNCTION_ARN
+          delete_secret_if_present "$INFRA_K8S_REPO" AUTH_LAMBDA_INVOKE_ARN
+          delete_secret_if_present "$INFRA_DB_REPO" AUTH_LAMBDA_SECURITY_GROUP_ID
+
+  require-destroy-coordinator:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy-infra' && !inputs.orchestrated
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::Use Destroy Ambiente Homolog/Prod no repositório infra-k8s, com confirmação explícita."
+          exit 1
