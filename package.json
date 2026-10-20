@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node ./node_modules/jest/bin/jest.js --coverage",
     "package": "node scripts/package.js",
-    "lint": "node --check src/handler.js && node --check src/cpf.js && node --check src/clientRepository.js && node --check src/passwordService.js && node --check src/tokenService.js"
+    "lint": "node --check src/handler.js && node --check src/cpf.js && node --check src/clientRepository.js && node --check src/tokenService.js && node --check src/http.js && node --check src/observability.js"
   },
   "engines": {
     "node": ">=20"

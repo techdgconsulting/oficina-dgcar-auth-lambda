@@ -1,8 +1,9 @@
-function jsonResponse(statusCode, body) {
+function jsonResponse(statusCode, body, extraHeaders = {}) {
   return {
     statusCode,
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      ...extraHeaders
     },
     body: JSON.stringify(body)
   };

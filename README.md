@@ -1,538 +1,114 @@
 # oficina-dgcar-auth-lambda
 
-Lambda de autenticacao externa por CPF e senha para clientes da Oficina Mecanica DGCar.
+Lambda de autenticação externa de clientes da Oficina DGCar. Recebe CPF e senha em `POST /auth/cpf`, consulta PostgreSQL, valida o hash bcrypt e emite JWT com `tipo=CLIENTE`. A API principal valida esse JWT para permitir consultas às OS do próprio cliente. O repositório contém código Node.js, testes, empacotamento e Terraform da função para homolog e prod.
 
-## Proposito
+## Tecnologias e arquitetura
 
-Este repositorio contem a Function Serverless implementada para:
+Node.js 20, CommonJS, `pg`, `bcryptjs`, `jsonwebtoken`, Jest, Terraform, AWS Lambda, IAM, VPC, CloudWatch Logs e GitHub Actions.
 
-- receber CPF e senha informados pelo cliente externo;
-- validar formato e digitos do CPF;
-- consultar o cliente no PostgreSQL gerenciado;
-- verificar existencia e status do cliente;
-- validar a senha contra hash armazenado no banco;
-- emitir JWT externo com `tipo=CLIENTE`;
-- separar o JWT de cliente do JWT interno usado por `ATENDENTE`, `MECANICO` e `GESTOR`.
-
-## Documentacao Central
-
-A documentacao arquitetural completa do Tech Challenge 3 esta centralizada em:
-
-[oficina-dgcar-docs](https://github.com/techdgconsulting/oficina-dgcar-docs)
-
-Este repositorio mantem apenas a documentacao especifica da Lambda Auth CPF + Senha, incluindo contrato, variaveis, Terraform, pipeline e deploy da funcao.
-
-## Contrato HTTP
-
-Endpoint exposto pelo API Gateway:
-
-```http
-POST /auth/cpf
-content-type: application/json
+```mermaid
+flowchart LR
+  Client[Cliente] --> Gateway[API Gateway - infra-k8s]
+  Gateway --> Lambda[Lambda Auth CPF]
+  Lambda --> DB[(RDS PostgreSQL - infra-db)]
+  Lambda --> JWT[JWT CLIENTE]
+  JWT --> API[API Spring Boot]
+  Lambda --> CW[JSON no CloudWatch Logs]
+  TF[Terraform deste repositorio] --> Lambda
+  TF --> IAM[IAM, Security Group e Log Group]
 ```
 
-Entrada:
+A rota do Gateway é provisionada por infra-k8s. O schema e as migrations pertencem à API; o RDS é provisionado por infra-db.
 
-```json
-{
-  "cpf": "529.982.247-25",
-  "senha": "Cliente@123"
-}
-```
+## Contrato e clientes
 
-Resposta `200`:
+`POST /auth/cpf` recebe JSON com `cpf` e `senha`. Em sucesso, responde 200 com `tokenType`, `accessToken` e `expiresIn`. Validação de entrada, credenciais, situação do cliente e falhas internas produzem os códigos definidos no [handler](src/handler.js). O header `X-Correlation-Id` é devolvido nas respostas produzidas pelo handler.
 
-```json
-{
-  "tokenType": "Bearer",
-  "accessToken": "jwt-do-cliente",
-  "expiresIn": "15m"
-}
-```
+- [Contrato executável da autenticação](src/handler.js) e [formatação das respostas](src/http.js).
+- [Collection Postman das APIs](https://github.com/techdgconsulting/oficina-dgcar-api/blob/homolog/postman/Oficina-DGCar-Tech-Challenge-Fase-3.postman_collection.json), pasta de autenticação pelo Gateway.
+- [Swagger da API consumidora em execução local](http://localhost:8080/swagger-ui.html) e [OpenAPI JSON](http://localhost:8080/api-docs).
+- Em homolog e prod: `${OFICINA_PUBLIC_BASE_URL}/swagger-ui.html` e `${OFICINA_PUBLIC_BASE_URL}/api-docs`.
 
-Erros esperados:
+A Lambda não publica Swagger próprio. O OpenAPI Spring Boot descreve a API principal; o contrato da rota `/auth/cpf` é o handler e sua representação na collection. Não confunda o login de cliente com `/api/auth/login`, destinado a funcionários.
 
-- `400 CPF_INVALIDO`: CPF com formato ou digitos invalidos.
-- `400 SENHA_OBRIGATORIA`: senha ausente ou em formato invalido.
-- `400 JSON_INVALIDO`: corpo da requisicao nao e JSON valido.
-- `404 CLIENTE_NAO_ENCONTRADO`: CPF valido sem cliente cadastrado.
-- `401 CREDENCIAIS_INVALIDAS`: CPF existente com senha incorreta ou hash ausente.
-- `403 CLIENTE_SEM_ACESSO`: cliente existe, mas status nao permite autenticacao.
-- `500 ERRO_INTERNO`: falha inesperada de banco, token ou configuracao.
+## Instalação, testes e pacote
 
-Regras de contrato implementadas:
+Com Node.js 20 e npm instalados, na raiz:
 
-- o CPF e normalizado para apenas digitos antes da consulta;
-- o CPF possui validacao de tamanho, formato e digitos verificadores;
-- o cliente e consultado na tabela configurada por variaveis de ambiente;
-- a autenticacao depende da existencia do cliente;
-- CPF sozinho nao autentica cliente externo;
-- a senha recebida e comparada com o hash configurado por `CLIENT_PASSWORD_HASH_COLUMN`;
-- o status do cliente e validado contra `CLIENT_ALLOWED_STATUSES`;
-- o JWT externo sempre e emitido com `tipo=CLIENTE`;
-- o JWT externo nao carrega roles internas da oficina.
-
-Query de cliente padrao:
-
-```text
-tabela=clientes
-coluna_id=id
-coluna_documento=documento
-coluna_senha_hash=senha_hash
-status_padrao=ATIVO
-coluna_status=status_cliente
-```
-
-Configuracao de status usada no banco:
-
-```text
-CLIENT_STATUS_COLUMN=status_cliente
-CLIENT_ALLOWED_STATUSES=ATIVO
-```
-
-## Claims Do JWT Externo
-
-O token emitido possui claims especificas de cliente:
-
-- `sub`: CPF normalizado;
-- `clienteId`;
-- `tipo`: `CLIENTE`;
-- `status`;
-- `iat`;
-- `exp`;
-- `iss`;
-- `aud`.
-
-Este token nao carrega perfis internos, como `ATENDENTE`, `MECANICO` ou `GESTOR`.
-
-## Variaveis De Ambiente
-
-Banco:
-
-- `DB_HOST`;
-- `DB_PORT`, padrao `5432`;
-- `DB_NAME`;
-- `DB_USERNAME`;
-- `DB_PASSWORD`;
-- `DB_SSL`, padrao `false`;
-- `DB_POOL_MAX`, padrao `2`;
-- `DB_IDLE_TIMEOUT_MS`, padrao `10000`.
-
-Consulta de cliente:
-
-- `CLIENT_TABLE`, padrao `clientes`;
-- `CLIENT_ID_COLUMN`, padrao `id`;
-- `CLIENT_DOCUMENT_COLUMN`, padrao `documento`;
-- `CLIENT_PASSWORD_HASH_COLUMN`, padrao `senha_hash`;
-- `CLIENT_STATUS_COLUMN`, padrao `status_cliente`;
-- `CLIENT_DEFAULT_STATUS`, padrao `ATIVO`;
-- `CLIENT_ALLOWED_STATUSES`, padrao `ATIVO`.
-
-O banco possui `clientes.status_cliente`. `CLIENT_DEFAULT_STATUS` permanece apenas como compatibilidade para ambientes legados em que `CLIENT_STATUS_COLUMN` seja esvaziado explicitamente.
-
-JWT:
-
-- `CLIENT_JWT_SECRET`, minimo de 32 caracteres;
-- `CLIENT_JWT_ISSUER`, padrao `oficina-dgcar-auth-lambda`;
-- `CLIENT_JWT_AUDIENCE`, padrao `oficina-dgcar-api`;
-- `CLIENT_JWT_EXPIRES_IN`, padrao `15m`.
-
-## Execucao Local
-
-```bash
+```sh
 npm ci
+npm run lint
 npm test
 npm run package
 ```
 
-Para simular chamada local:
+O pacote é gerado em `dist/auth-cpf-lambda.zip`. Os testes automatizados não exigem uma Lambda publicada; a invocação funcional local exige banco e configuração válidos.
 
-```bash
-node -e "const { handler } = require('./src/handler'); handler({ body: JSON.stringify({ cpf: '529.982.247-25', senha: 'Cliente@123' }) }).then(console.log)"
+## Invocação local
+
+1. Disponibilize PostgreSQL com as migrations da API, incluindo `clientes.senha_hash` e, para usar status persistido, `clientes.status_cliente`.
+2. Configure um cliente de teste com CPF válido, hash bcrypt e status permitido, sem usar dados reais.
+3. Copie `.env.example` para `.env` e ajuste as variáveis abaixo. Com o PostgreSQL do Compose da API, a porta no host é **5434**, não 5432.
+4. Use Node.js 20.6 ou superior para carregar o arquivo com `--env-file`. Não há servidor HTTP local ou script `npm start` nesse repositório.
+
+| Variável | Configuração |
+|---|---|
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` | Banco acessível a partir do processo; porta padrão 5432 |
+| `DB_SSL` | `false` para banco local sem TLS; `true` para a conexão RDS configurada pelo workflow |
+| `CLIENT_TABLE`, `CLIENT_ID_COLUMN`, `CLIENT_DOCUMENT_COLUMN` | Padrões `clientes`, `id`, `documento` |
+| `CLIENT_PASSWORD_HASH_COLUMN` | Padrão do código `senha_hash` |
+| `CLIENT_STATUS_COLUMN` | Coluna de status a consultar; veja a distinção abaixo |
+| `CLIENT_DEFAULT_STATUS`, `CLIENT_ALLOWED_STATUSES` | Padrões `ATIVO`; permitidos separados por vírgula |
+| `CLIENT_JWT_SECRET` | Segredo HS256 adequado, igual ao usado pela API no mesmo ambiente |
+| `CLIENT_JWT_ISSUER`, `CLIENT_JWT_AUDIENCE`, `CLIENT_JWT_EXPIRES_IN` | Padrões `oficina-dgcar-auth-lambda`, `oficina-dgcar-api`, `15m` |
+
+A migration V18 da API cria `clientes.status_cliente`. O Terraform e o workflow usam essa coluna por padrão. O código admite `CLIENT_STATUS_COLUMN` vazio para consultar o status padrão em execuções locais; em ambientes provisionados, mantenha `status_cliente` para validar o status persistido.
+
+Para simular o evento sem imprimir o token retornado, configure `TEST_CLIENT_CPF` e `TEST_CLIENT_PASSWORD` no ambiente local e execute:
+
+```sh
+node --env-file=.env -e "const {handler}=require('./src/handler'); const {closePool}=require('./src/clientRepository'); handler({headers:{'X-Correlation-Id':'validacao-local-auth'},body:JSON.stringify({cpf:process.env.TEST_CLIENT_CPF,senha:process.env.TEST_CLIENT_PASSWORD})}).then(r=>console.log({statusCode:r.statusCode,correlationId:r.headers['X-Correlation-Id']})).finally(closePool)"
 ```
 
-## Pipeline
+A função abre conexão com o banco; um RDS privado não fica acessível somente por configurar `DB_HOST` no computador. É necessário um caminho de rede autorizado. O modo `DB_SSL=true` utiliza TLS com `rejectUnauthorized=false` no código atual; não equivale à verificação da cadeia do certificado.
 
-Pull Requests e pushes executam:
+## CI/CD e deploy
 
-- instalacao de dependencias;
-- lint sintatico;
-- testes automatizados com cobertura;
-- `npm audit --omit=dev`;
-- empacotamento da Lambda em `dist/auth-cpf-lambda.zip`.
-- validacao Terraform;
-- `terraform plan -refresh=false` offline.
+O workflow [Auth CPF Lambda](.github/workflows/ci.yml) executa validação em PRs e pushes para `homolog` e `main`: instalação, lint, testes, auditoria das dependências de produção, pacote e validação/plano Terraform. **Push não executa apply-infra nem deploy-code.**
 
-Deploy real ocorre apenas por `workflow_dispatch`, usando o environment `homolog` ou `prod`.
+As operações reais usam `workflow_dispatch`, manualmente ou pela orquestração de infra-k8s:
 
-Acoes manuais disponiveis:
+| Action | Resultado |
+|---|---|
+| `package` | Valida e gera artefato, sem deploy |
+| `apply-infra` | Após validação, cria ou atualiza função, rede, IAM e log group pelo Terraform; inclui o pacote |
+| `deploy-code` | Após validação, atualiza o código de uma função existente usando o ZIP |
+| `destroy-infra` | Remove a função e sua infraestrutura, com `confirm_destroy=DESTROY` e espera pela liberação dos recursos de rede |
 
-- `package`: valida e empacota a Lambda;
-- `apply-infra`: provisiona ou atualiza a infraestrutura AWS da Lambda via Terraform;
-- `deploy-code`: atualiza somente o codigo da Lambda ja existente;
-- `destroy-infra`: remove Function, Log Group, IAM, security group da Lambda e limpa os outputs publicados nos repos dependentes.
+Em **Actions → Auth CPF Lambda → Run workflow**, escolha a referência, `environment=homolog` ou `prod` e a action. A orquestração completa usa homolog para homolog e main para prod, respeitando as configurações dos GitHub Environments.
 
-O `destroy-infra` exige `confirm_destroy=DESTROY` e aprovacao do GitHub Environment. Esse fluxo deve ser executado depois do destroy do banco e antes do destroy final da VPC no repo `oficina-dgcar-infra-k8s`. O banco sai antes porque o security group do RDS referencia o security group da Lambda como origem autorizada para PostgreSQL. A limpeza dos outputs publicados e idempotente: secrets `AUTH_LAMBDA_*` ausentes sao registrados como ja removidos e nao interrompem o teardown.
+Para `apply-infra`, configure credenciais AWS, `AWS_REGION`, state S3 (`TF_STATE_BUCKET`, `TF_STATE_KEY`), `VPC_ID`, `PRIVATE_SUBNET_IDS` em JSON, conexão `DB_*`, `CLIENT_JWT_SECRET` e `GH_AUTOMATION_TOKEN`. `LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS` é opcional; `CLIENT_STATUS_COLUMN` é repassado do secret quando definido. Os secrets de conexão precisam estar preenchidos: a execução do workflow não descobre automaticamente o host e as credenciais do RDS.
 
-## Infraestrutura Terraform
+Para `deploy-code`, são necessários acesso AWS e `AUTH_LAMBDA_FUNCTION_NAME`. Ele não atualiza as variáveis de ambiente da função; essas pertencem ao apply de infraestrutura.
 
-O diretorio `terraform/` provisiona:
+O apply publica `AUTH_LAMBDA_FUNCTION_NAME` neste repositório, nome/ARN/invoke ARN em infra-k8s e o security group em infra-db. O Terraform também expõe o security group da Lambda, usado para autorizar a conexão PostgreSQL. A integração de `POST /auth/cpf` é aplicada pela infraestrutura do Gateway.
 
-- `aws_lambda_function` para Auth CPF + Senha;
-- IAM Role da Lambda;
-- policies gerenciadas `AWSLambdaBasicExecutionRole` e `AWSLambdaVPCAccessExecutionRole`;
-- CloudWatch Log Group;
-- Security Group da Lambda;
-- configuracao de VPC com subnets privadas;
-- variaveis de ambiente usadas em runtime.
+### Validação local do Terraform
 
-Outputs publicados:
+Depois de gerar o ZIP e com Terraform disponível:
 
-- `auth_lambda_function_name`;
-- `auth_lambda_function_arn`;
-- `auth_lambda_invoke_arn`;
-- `auth_lambda_security_group_id`;
-- `auth_lambda_log_group_name`.
-
-Os outputs `auth_lambda_function_name`, `auth_lambda_invoke_arn` e `auth_lambda_function_arn` foram definidos para consumo pelo repositorio `oficina-dgcar-infra-k8s`, responsavel por conectar o API Gateway a rota `POST /auth/cpf`.
-
-O output `auth_lambda_security_group_id` foi definido para consumo pelo repositorio `oficina-dgcar-infra-db`, responsavel por liberar a entrada PostgreSQL no RDS para a Lambda Auth CPF + Senha.
-
-## Secrets Do GitHub
-
-Os secrets foram organizados em GitHub Environments, nao como secrets globais do repositorio.
-
-Ambientes configurados:
-
-- `homolog`: usado pela branch `homolog`;
-- `prod`: usado pela branch `main`.
-
-Em `prod`, a aprovacao manual obrigatoria foi configurada antes de qualquer deploy.
-
-O acesso fica em:
-
-```text
-Settings -> Environments -> homolog -> Environment secrets
-Settings -> Environments -> prod -> Environment secrets
+```sh
+terraform -chdir=terraform fmt -check -recursive
+terraform -chdir=terraform init -backend=false
+terraform -chdir=terraform validate
 ```
 
-Valores reais nao foram versionados em `.tfvars`, README, codigo, prints ou arquivos locais.
+Esses comandos validam a configuração sem aplicar recursos. Um plano real exige variáveis do ambiente, acesso AWS e inicialização do backend correto. A CI faz seu plano sem refresh em uma cópia de checkout sem o backend remoto; não use esse plano como confirmação do estado da AWS.
 
-### Bootstrap AWS Ja Confirmado
+## Logs e correlação
 
-O projeto historico `mvp-posfiap-oficina-mecanica` foi usado como fonte de verdade para reaproveitar a configuracao AWS ja existente.
+O logger emite JSON por `console.log`/`console.error`, com `timestamp`, `level`, `message`, `service` e atributos do fluxo. O CPF é mascarado como `***.***.***-XX` ou `NAO_INFORMADO`. A seleção do identificador usa `X-Correlation-Id` preenchido ou `X-Request-Id`, valida caracteres e tamanho e gera UUID se inválido. O handler devolve esse identificador; isso não comprova trace distribuído entre Lambda e API.
 
-Conta AWS confirmada:
+O destino configurado é CloudWatch Logs, em `/aws/lambda/oficina-dgcar-<ambiente>-auth-cpf`, com retenção padrão Terraform de 14 dias. O logger não acrescenta automaticamente `environment` ou metadados APM. Não há extensão, agente ou encaminhamento New Relic comprovado nessa configuração.
 
-```text
-Account: 857145323352
-Region: us-east-1
-IAM user local usado no bootstrap: arn:aws:iam::857145323352:user/16soat-tf
-```
-
-Bucket S3 de state reaproveitado:
-
-```text
-TF_STATE_BUCKET=oficina-dgcar-fiap-tfstate-tsoat16
-```
-
-Validacoes do bucket:
-
-```text
-Versioning: Enabled
-Encryption: AES256
-Public access: blocked
-```
-
-Lock do Terraform padronizado com lockfile nativo do backend S3:
-
-```text
-use_lockfile=true
-```
-
-Chaves de state separadas por ambiente:
-
-```text
-homolog -> TF_STATE_KEY=homolog/auth-lambda/terraform.tfstate
-prod    -> TF_STATE_KEY=prod/auth-lambda/terraform.tfstate
-```
-
-Secrets ja configurados nos environments `homolog` e `prod` deste repositorio:
-
-```text
-AWS_ACCESS_KEY_ID
-AWS_SECRET_ACCESS_KEY
-AWS_REGION
-CLIENT_JWT_SECRET
-GH_AUTOMATION_TOKEN
-TF_STATE_BUCKET
-TF_STATE_KEY
-```
-
-Valores publicos configurados:
-
-```text
-AWS_REGION=us-east-1
-TF_STATE_BUCKET=oficina-dgcar-fiap-tfstate-tsoat16
-```
-
-O valor de `AWS_SECRET_ACCESS_KEY` nao foi exibido em documentacao. Ele foi gravado diretamente nos GitHub Environments.
-
-### Bootstrap Executado Via CLI
-
-A conta AWS ativa foi confirmada com:
-
-```powershell
-aws sts get-caller-identity
-```
-
-O bucket S3 do Terraform state foi confirmado com:
-
-```powershell
-aws s3api head-bucket `
-  --bucket oficina-dgcar-fiap-tfstate-tsoat16 `
-  --region us-east-1
-```
-
-O lock do Terraform foi alinhado ao padrao do projeto historico, usando `use_lockfile=true` no backend S3.
-
-Os secrets foram configurados via GitHub CLI com:
-
-```powershell
-$gh = 'C:\Program Files\GitHub CLI\gh.exe'
-$repo = 'techdgconsulting/oficina-dgcar-auth-lambda'
-
-$awsAccessKey = (aws configure get aws_access_key_id)
-$awsSecretKey = (aws configure get aws_secret_access_key)
-
-$commonSecrets = @{
-  AWS_ACCESS_KEY_ID     = $awsAccessKey
-  AWS_SECRET_ACCESS_KEY = $awsSecretKey
-  AWS_REGION            = 'us-east-1'
-  TF_STATE_BUCKET       = 'oficina-dgcar-fiap-tfstate-tsoat16'
-}
-
-foreach ($envName in @('homolog', 'prod')) {
-  foreach ($item in $commonSecrets.GetEnumerator()) {
-    & $gh secret set $item.Key --repo $repo --env $envName --body $item.Value
-  }
-}
-
-& $gh secret set TF_STATE_KEY --repo $repo --env homolog --body 'homolog/auth-lambda/terraform.tfstate'
-& $gh secret set TF_STATE_KEY --repo $repo --env prod --body 'prod/auth-lambda/terraform.tfstate'
-```
-
-```powershell
-& 'C:\Program Files\GitHub CLI\gh.exe' secret list `
-  --repo techdgconsulting/oficina-dgcar-auth-lambda `
-  --env homolog
-
-& 'C:\Program Files\GitHub CLI\gh.exe' secret list `
-  --repo techdgconsulting/oficina-dgcar-auth-lambda `
-  --env prod
-```
-
-### Secrets Necessarios Para `apply-infra`
-
-O `apply-infra` requer estes secrets no environment escolhido:
-
-```text
-VPC_ID
-PRIVATE_SUBNET_IDS
-DB_HOST
-DB_PORT
-DB_NAME
-DB_USERNAME
-DB_PASSWORD
-DB_SSL
-```
-
-Origem definida:
-
-```text
-oficina-dgcar-infra-k8s -> VPC_ID, PRIVATE_SUBNET_IDS
-oficina-dgcar-infra-db  -> DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD, DB_SSL
-```
-
-`PRIVATE_SUBNET_IDS` foi padronizado como lista JSON:
-
-```text
-["subnet-xxxx","subnet-yyyy"]
-```
-
-Para RDS PostgreSQL, a configuracao definida foi:
-
-```text
-DB_PORT=5432
-DB_SSL=true
-```
-
-`LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS` e opcional. Se nao houver grupos adicionais:
-
-```text
-LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS=[]
-```
-
-`CLIENT_STATUS_COLUMN` deve apontar para `status_cliente`. `CLIENT_DEFAULT_STATUS` e mantido apenas como fallback para execucoes legadas.
-
-### Matriz De Origem Dos Secrets
-
-| Secret | Origem | Momento de obtencao | Destino |
-|---|---|---|---|
-| `AWS_ACCESS_KEY_ID` | AWS IAM | Antes de qualquer `apply` Terraform | GitHub Environments `homolog` e `prod` |
-| `AWS_SECRET_ACCESS_KEY` | AWS IAM | Antes de qualquer `apply` Terraform | GitHub Environments `homolog` e `prod` |
-| `AWS_REGION` | Decisao de arquitetura AWS | Antes de qualquer `apply` Terraform | GitHub Environments `homolog` e `prod` |
-| `GH_AUTOMATION_TOKEN` | GitHub CLI/PAT com permissao de secrets | Antes da propagacao automatica entre repos | GitHub Environments `homolog` e `prod` |
-| `TF_STATE_BUCKET` | Bucket S3 de state Terraform | Antes do `apply-infra` | GitHub Environments `homolog` e `prod` |
-| `TF_STATE_KEY` | Chave segregada por repositorio e ambiente | Antes do `apply-infra` | GitHub Environments `homolog` e `prod` |
-| `VPC_ID` | Output `vpc_id` de `oficina-dgcar-infra-k8s` | Depois do apply da VPC/Kubernetes | `oficina-dgcar-auth-lambda` |
-| `PRIVATE_SUBNET_IDS` | Output `private_subnet_ids` de `oficina-dgcar-infra-k8s` | Depois do apply da VPC/Kubernetes | `oficina-dgcar-auth-lambda` |
-| `LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS` | Definicao de rede da Lambda | Depois da definicao de acesso ao RDS | `oficina-dgcar-auth-lambda` |
-| `DB_HOST` | Output `rds_endpoint` de `oficina-dgcar-infra-db` | Depois do apply do RDS | `oficina-dgcar-auth-lambda` |
-| `DB_PORT` | Output `rds_port` de `oficina-dgcar-infra-db` | Depois do apply do RDS | `oficina-dgcar-auth-lambda` |
-| `DB_NAME` | Output `db_name` ou variavel do RDS | Depois do apply do RDS | `oficina-dgcar-auth-lambda` |
-| `DB_USERNAME` | Variavel usada no RDS | Antes ou depois do apply do RDS | `oficina-dgcar-auth-lambda` |
-| `DB_PASSWORD` | Variavel usada no RDS | Antes ou depois do apply do RDS | `oficina-dgcar-auth-lambda` |
-| `DB_SSL` | Politica de conexao com RDS | Antes do `apply-infra` | `oficina-dgcar-auth-lambda` |
-| `CLIENT_STATUS_COLUMN` | Modelo relacional | Valor padrao `status_cliente` | `oficina-dgcar-auth-lambda` |
-| `CLIENT_JWT_SECRET` | Segredo externo de cliente | Antes do `apply-infra` | GitHub Environments `homolog` e `prod` |
-| `AUTH_LAMBDA_FUNCTION_NAME` | Output `auth_lambda_function_name` | Depois do `apply-infra` da Lambda | `oficina-dgcar-auth-lambda` e `oficina-dgcar-infra-k8s` |
-| `AUTH_LAMBDA_INVOKE_ARN` | Output `auth_lambda_invoke_arn` | Depois do `apply-infra` da Lambda | `oficina-dgcar-infra-k8s` |
-| `AUTH_LAMBDA_FUNCTION_ARN` | Output `auth_lambda_function_arn` | Depois do `apply-infra` da Lambda | `oficina-dgcar-infra-k8s` |
-| `AUTH_LAMBDA_SECURITY_GROUP_ID` | Output `auth_lambda_security_group_id` | Depois do `apply-infra` da Lambda | `oficina-dgcar-infra-db` |
-
-### Ordem Operacional De Provisionamento
-
-1. Usuario IAM do GitHub Actions selecionado: `16soat-tf`.
-2. Backend Terraform reaproveitado no S3 com `use_lockfile=true`.
-3. Secrets de bootstrap gravados nos environments `homolog` e `prod`.
-4. Infraestrutura de Kubernetes/VPC fornece `VPC_ID` e `PRIVATE_SUBNET_IDS`.
-5. Infraestrutura de RDS PostgreSQL fornece os secrets `DB_*`.
-6. `apply-infra` da Lambda cria a Function Serverless e publica os outputs.
-7. `oficina-dgcar-infra-k8s` consome os outputs da Lambda para integrar o API Gateway em `POST /auth/cpf`.
-
-### Automacao Entre Repositorios
-
-O workflow `apply-infra` publica automaticamente os outputs da Lambda em repositorios dependentes usando `GH_AUTOMATION_TOKEN`.
-
-Secrets gravados neste repositorio apos o `apply-infra`:
-
-- `AUTH_LAMBDA_FUNCTION_NAME`.
-
-Secrets gravados em `oficina-dgcar-infra-k8s` apos o `apply-infra`:
-
-- `AUTH_LAMBDA_FUNCTION_NAME`;
-- `AUTH_LAMBDA_FUNCTION_ARN`;
-- `AUTH_LAMBDA_INVOKE_ARN`.
-
-Secrets gravados em `oficina-dgcar-infra-db` apos o `apply-infra`:
-
-- `AUTH_LAMBDA_SECURITY_GROUP_ID`.
-
-Fluxo automatizado:
-
-1. `oficina-dgcar-infra-k8s` publica `VPC_ID` e `PRIVATE_SUBNET_IDS`.
-2. `oficina-dgcar-infra-db` publica `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` e `DB_SSL`.
-3. `oficina-dgcar-auth-lambda` executa `apply-infra`.
-4. O workflow da Lambda publica os outputs `AUTH_LAMBDA_*` para `oficina-dgcar-infra-k8s`.
-5. O workflow da Lambda publica `AUTH_LAMBDA_SECURITY_GROUP_ID` para `oficina-dgcar-infra-db`.
-6. `oficina-dgcar-infra-db` executa novo `apply` para liberar PostgreSQL ao security group da Lambda.
-7. `oficina-dgcar-infra-k8s` executa novo `apply` para conectar API Gateway a Lambda.
-
-### Geracao Do Segredo JWT Externo
-
-O segredo JWT externo foi gerado localmente com:
-
-```powershell
-node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
-```
-
-O valor gerado foi salvo como `CLIENT_JWT_SECRET` nos environments `homolog` e `prod`.
-
-Politica aplicada:
-
-- o mesmo nome de secret foi usado nos dois ambientes;
-- valores diferentes foram usados para `homolog` e `prod`;
-- o `JWT_SECRET` interno da aplicacao Spring nao foi reutilizado;
-- o token externo foi limitado a `tipo=CLIENTE`.
-
-Secrets esperados para `apply-infra`:
-
-- `AWS_ACCESS_KEY_ID`;
-- `AWS_SECRET_ACCESS_KEY`;
-- `AWS_REGION`;
-- `GH_AUTOMATION_TOKEN`;
-- `TF_STATE_BUCKET`;
-- `TF_STATE_KEY`;
-- `VPC_ID`;
-- `PRIVATE_SUBNET_IDS`;
-- `LAMBDA_ADDITIONAL_SECURITY_GROUP_IDS`, opcional;
-- `DB_HOST`;
-- `DB_PORT`;
-- `DB_NAME`;
-- `DB_USERNAME`;
-- `DB_PASSWORD`;
-- `DB_SSL`;
-- `CLIENT_PASSWORD_HASH_COLUMN`, padrao `senha_hash`;
-- `CLIENT_STATUS_COLUMN`, padrao `status_cliente`;
-- `CLIENT_JWT_SECRET`.
-
-Secrets esperados para `deploy-code`:
-
-- `AWS_ACCESS_KEY_ID`;
-- `AWS_SECRET_ACCESS_KEY`;
-- `AWS_REGION`;
-- `AUTH_LAMBDA_FUNCTION_NAME`.
-
-Secrets esperados em runtime da Lambda:
-
-- variaveis de banco;
-- variaveis de JWT;
-- variaveis de consulta de cliente.
-
-## Provisionamento
-
-Execucao local para validar Terraform:
-
-```bash
-npm ci
-npm run package
-cd terraform
-terraform init -backend=false
-terraform fmt -check -recursive
-terraform validate
-terraform plan -refresh=false
-```
-
-A infraestrutura real e aplicada pelo workflow manual:
-
-```text
-Actions -> Auth CPF Lambda -> Run workflow -> action=apply-infra
-```
-
-A atualizacao exclusiva do codigo e feita pelo workflow manual:
-
-```text
-Actions -> Auth CPF Lambda -> Run workflow -> action=deploy-code
-```
-
-## Integracao Com Outros Repositorios
-
-- `oficina-dgcar-infra-db`: fornece endpoint, porta, nome do banco e conectividade PostgreSQL.
-- `oficina-dgcar-infra-k8s`: integra a Lambda ao API Gateway na rota `POST /auth/cpf`.
-- `oficina-dgcar-api`: valida tambem o JWT externo de cliente nas rotas protegidas.
-
-## Evidencia
-
-A evidencia minima de funcionamento e composta por:
-
-- testes automatizados verdes;
-- package `dist/auth-cpf-lambda.zip` gerado;
-- chamada `POST /auth/cpf` com CPF e senha retornando JWT;
-- chamada `POST /auth/cpf` sem senha retornando `400 SENHA_OBRIGATORIA`;
-- chamada `POST /auth/cpf` com senha incorreta retornando `401 CREDENCIAIS_INVALIDAS`;
-- JWT decodificado contendo `tipo=CLIENTE`, `clienteId`, `status`, `sub`, `iat` e `exp`.
-
-## Origem Historica
-
-O commit de origem e a rastreabilidade da extracao estao registrados em [`ORIGEM_HISTORICA.md`](./ORIGEM_HISTORICA.md).
+Veja a [documentação central](https://github.com/techdgconsulting/oficina-dgcar-docs), em `docs/observabilidade/logs-json-correlation-id.md`, e [ORIGEM_HISTORICA.md](ORIGEM_HISTORICA.md).
