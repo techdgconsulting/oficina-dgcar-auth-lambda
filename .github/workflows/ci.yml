@@ -1,6 +1,6 @@
 name: Auth CPF Lambda
 
-run-name: "${{ github.workflow }} | ${{ inputs.parent_run_id || github.run_id }} | ${{ inputs.source_sha || github.sha }}"
+run-name: "${{ github.workflow }} | ${{ inputs.parent_run_id || github.run_id }} | ${{ inputs.orchestrated && inputs.source_sha || github.sha }}"
 
 on:
   pull_request:
@@ -57,7 +57,27 @@ permissions:
   contents: read
 
 jobs:
+  authorize:
+    name: Authorize deployment source
+    if: github.event_name == 'workflow_dispatch' && inputs.orchestrated && (github.ref_name == 'homolog' || github.ref_name == 'main')
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Authorize protected source before checkout and tests
+        env:
+          GH_TOKEN: ${{ secrets.GH_AUTOMATION_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+          DEPLOY_ACTION: "${{ inputs.action }}"
+        run: python3 scripts/ci/deployment.py worker
+
   validate:
+    needs: authorize
+    if: ${{ !cancelled() && ((inputs.orchestrated && needs.authorize.result == 'success') || (!inputs.orchestrated && needs.authorize.result == 'skipped')) }}
     name: validate
     runs-on: ubuntu-latest
 
@@ -78,7 +98,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
 
       - name: Validate deployment safeguards
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
@@ -160,7 +180,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
 
       - name: Authorize environment coordinator
         env:
@@ -255,7 +275,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
 
       - name: Authorize environment coordinator
         env:
@@ -294,7 +314,7 @@ jobs:
   request-deployment:
     name: Queue environment update
     needs: validate
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.orchestrated && (inputs.action == 'apply-infra' || inputs.action == 'deploy-code'))
+    if: ${{ !cancelled() && needs.validate.result == 'success' && ((github.ref_name == 'homolog' || github.ref_name == 'main') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.orchestrated && (inputs.action == 'apply-infra' || inputs.action == 'deploy-code')))) }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref_name == 'main' && 'prod' || 'homolog') }}
     steps:
@@ -318,7 +338,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.orchestrated && inputs.source_sha || github.sha }}
 
       - name: Authorize environment coordinator
         env:
